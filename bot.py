@@ -2,7 +2,7 @@ import os
 import anthropic
 import requests
 from telegram import Update
-from telegram.ext import Application, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes
 
 client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
@@ -18,19 +18,24 @@ def get_sheet_data():
         if len(parts) >= 2:
             question = parts[0].replace('"', '').strip()
             answer = parts[1].replace('"', '').strip()
-            qa += f"س: {question}\nج: {answer}\n\n"
+            qa += f"{question}: {answer}\n"
     return qa
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "أهلاً! أنا مساعد السيلز 🏢\nاسألني عن أي مشروع وهرد عليك فوراً."
+    )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_message = update.message.text
     sheet_data = get_sheet_data()
-    
+
     system_prompt = f"""أنت مساعد سيلز محترف متخصص في العقارات.
-عندك المعلومات دي عن المشروع:
+عندك المعلومات دي عن المشاريع:
 
 {sheet_data}
 
-رد على أسئلة السيلز بشكل طبيعي ومختصر بناءً على المعلومات دي.
+رد على أسئلة السيلز بشكل طبيعي ومختصر.
 لو السؤال مش موجود قول: مش عندي معلومة عن ده."""
 
     response = client.messages.create(
@@ -42,9 +47,4 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(response.content[0].text)
 
 def main():
-    app = Application.builder().token(os.environ["TELEGRAM_TOKEN"]).build()
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.run_polling(drop_pending_updates=True)
-
-if __name__ == "__main__":
-    main()
+    
