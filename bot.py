@@ -7,39 +7,49 @@ from telegram.ext import Application, MessageHandler, CommandHandler, CallbackQu
 
 SHEET_ID = "1x5CfKVrgXZy1-1yVPoqAwcS0KpxeOyzxfA8shDt2qkw"
 AV_SHEET_ID = "1f-1lkgr7nGiQofoREnhfbszjaJFu17OtZaMJ09_sLWw"
-PROJECTS = ["D11 BUSINESS", "D12 Medical", "Metro Degla", "Medist", "Tigan", "WW1", "WW2", "STAGE X", "RESALE", "MIDST", "TIJAN"]
-AV_PROJECTS = ["WW1", "WW2", "D11 BUSINESS", "D12 Medical", "TIJAN", "MIDST", "STAGE X", "RESALE"]
 SECRET_PASSWORD = os.environ.get("SECRET_PASSWORD", "Adel2026")
+
+PROJECTS = ["D11 BUSINESS", "D12 Medical", "Metro Degla", "Medist", "Tigan", "WW1", "WW2", "STAGE X", "RESALE", "MIDST", "TIJAN"]
+
+PROJECT_ALIASES = {
+   "d11": "D11 BUSINESS",
+   "d11 business": "D11 BUSINESS",
+   "d12": "D12 Medical",
+   "d12 medical": "D12 Medical",
+   "ww1": "WW1",
+   "waterway 1": "WW1",
+   "waterway1": "WW1",
+   "ww2": "WW2",
+   "waterway 2": "WW2",
+   "waterway2": "WW2",
+   "tijan": "TIJAN",
+   "midst": "MIDST",
+   "stage x": "STAGE X",
+   "stagex": "STAGE X",
+   "resale": "RESALE",
+   "metro": "Metro Degla",
+   "metro degla": "Metro Degla",
+}
 
 COMPANY_INFO = """
 معمار دجلة للتطوير العقاري - MEMAAR DEGLA DEVELOPMENT
 تأسست: 2019 في العاشر من رمضان
-فريق: أكثر من 65 متخصص
-التمويل: ذاتي بالكامل
+فريق: أكثر من 65 متخصص - تمويل ذاتي بالكامل
 الموقع: memaardegla.com | 15409
 
-المؤسسون:
-- أ/ أحمد عبد العزيز
-- م/ معاذ باشا
-- أ/ محمد خليل
+المؤسسون: أ/ أحمد عبد العزيز | م/ معاذ باشا | أ/ محمد خليل
 
 المشاريع المنفذة:
-1. Degla One Mall (2019-2021) - 48 وحدة (25 تجاري + 11 إداري + 12 سكني)
-2. Sky Degla Mall (2020-2023) - 233 وحدة (116 تجاري + 78 إداري + 39 طبي)
+- Degla One Mall (2019-2021): 48 وحدة
+- Sky Degla Mall (2020-2023): 233 وحدة
 
 المشاريع قيد التنفيذ:
-3. Metro Degla - 396 وحدة (231 تجاري + 87 إداري + 78 طبي)
-4. Stage X - 96 وحدة تجارية
-5. Midst Degla Mall - 99 وحدة (54 تجاري + 45 طبي)
-6. Tijan Mall - 136 وحدة (76 تجاري + 20 إداري + 40 طبي)
-7. Metro Plus Mall - 163 وحدة (91 تجاري + 48 إداري + 24 طبي)
-8. Waterway Degla Mall - 188 وحدة (95 تجاري + 54 إداري + 39 طبي)
-
-مزايا الشركة:
-- أول شركة تغير الطابع العمراني التقليدي للعاشر من رمضان
-- مواقع استراتيجية بحركة سكانية مرتفعة
-- التزام بالتسليم طبقاً للمواصفات
-- سمعة ممتازة داخل وخارج المدينة
+- Metro Degla: 396 وحدة
+- Stage X: 96 وحدة تجارية
+- Midst Degla Mall: 99 وحدة
+- Tijan Mall: 136 وحدة
+- Metro Plus Mall: 163 وحدة
+- Waterway Degla Mall: 188 وحدة
 """
 
 creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
@@ -52,63 +62,91 @@ client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 user_context = {}
 chat_history = {}
 
-def get_availability_data():
+def detect_project(text):
+   text_lower = text.lower().strip()
+   for alias, real in PROJECT_ALIASES.items():
+       if alias in text_lower:
+           return real
+   for p in PROJECTS:
+       if p.lower() in text_lower:
+           return p
+   return None
+
+def get_project_status(project_filter=None):
    try:
        all_data = []
+       sheets_to_check = []
        for ws in av_sh.worksheets():
+           if project_filter:
+               if project_filter.lower() in ws.title.lower():
+                   sheets_to_check = [ws]
+                   break
+           else:
+               sheets_to_check.append(ws)
+
+       results = {}
+       for ws in sheets_to_check:
            try:
                data = ws.get_all_values()
-               if len(data) < 3:
-                   continue
-               for row in data[3:]:
-                   if len(row) >= 8 and row[2]:
-                       unit = {
-                           "sheet": ws.title,
-                           "unit": row[2] if len(row) > 2 else "",
-                           "area": row[3] if len(row) > 3 else "",
-                           "price": row[4] if len(row) > 4 else "",
-                           "total": row[5] if len(row) > 5 else "",
-                           "project": row[6] if len(row) > 6 else "",
-                           "status": row[7] if len(row) > 7 else "",
-                           "down_payment": row[8] if len(row) > 8 else "",
-                           "instalments": row[9] if len(row) > 9 else "",
-                           "cash_discount": row[10] if len(row) > 10 else ""
-                       }
-                       all_data.append(unit)
+               counts = {"available": 0, "reserved": 0, "hold": 0, "other": 0}
+               for row in data:
+                   for cell in row:
+                       cell_lower = cell.strip().lower()
+                       if cell_lower == "available":
+                           counts["available"] += 1
+                       elif cell_lower == "reserved":
+                           counts["reserved"] += 1
+                       elif cell_lower == "hold":
+                           counts["hold"] += 1
+               results[ws.title] = counts
            except:
                continue
-       return all_data
+       return results
    except:
-       return []
+       return {}
 
-def get_summary_and_details(project_filter=None):
-   all_data = get_availability_data()
-   available = [u for u in all_data if u["status"].lower() == "available"]
-   if project_filter:
-       available = [u for u in available if project_filter.lower() in u["sheet"].lower() or project_filter.lower() in u["project"].lower()]
+def format_status(results):
+   if not results:
+       return "لا توجد بيانات."
+   text = ""
+   for project, counts in results.items():
+       total = counts["available"] + counts["reserved"] + counts["hold"]
+       if total == 0:
+           continue
+       text += f"📊 *{project}*\n"
+       text += f"✅ متاح: {counts['available']}\n"
+       text += f"🔴 محجوز: {counts['reserved']}\n"
+       text += f"🔵 Hold: {counts['hold']}\n"
+       text += f"📦 الإجمالي: {total}\n\n"
+   return text if text else "لا توجد بيانات."
 
-   summary = {}
-   for u in available:
-       key = u["sheet"]
-       if key not in summary:
-           summary[key] = []
-       summary[key].append(u)
-
-   summary_text = "ملخص الوحدات المتاحة في معمار دجلة:\n\n"
-   for project, units in summary.items():
-       summary_text += f"• {project}: {len(units)} وحدة\n"
-   summary_text += "\nللتفاصيل اكتب: تفاصيل [اسم المشروع]"
-   return summary_text, summary
-
-def get_project_details(project_filter):
-   all_data = get_availability_data()
-   available = [u for u in all_data if u["status"].lower() == "available" and (project_filter.lower() in u["sheet"].lower() or project_filter.lower() in u["project"].lower())]
-   if not available:
-       return f"لا توجد وحدات متاحة في {project_filter} حالياً."
-   result = f"الوحدات المتاحة في {project_filter}:\n\n"
-   for u in available:
-       result += f"• {u['unit']} | {u['area']}م² | إجمالي {u['total']} جنيه | مقدم {u['down_payment']}\n"
-   return result
+def get_available_units(project_filter=None):
+   try:
+       result = ""
+       for ws in av_sh.worksheets():
+           if project_filter and project_filter.lower() not in ws.title.lower():
+               continue
+           data = ws.get_all_values()
+           units = []
+           for row in data:
+               if len(row) >= 8:
+                   status = ""
+                   for i, cell in enumerate(row):
+                       if cell.strip().lower() == "available":
+                           status = "available"
+                           unit_col = row[2] if len(row) > 2 else ""
+                           area_col = row[3] if len(row) > 3 else ""
+                           total_col = row[5] if len(row) > 5 else ""
+                           down_col = row[8] if len(row) > 8 else ""
+                           if unit_col:
+                               units.append(f"• {unit_col} | {area_col}م² | {total_col} جنيه | مقدم {down_col}")
+                           break
+           if units:
+               result += f"*{ws.title}* - {len(units)} وحدة متاحة:\n"
+               result += "\n".join(units) + "\n\n"
+       return result if result else "لا توجد وحدات متاحة."
+   except:
+       return "حدث خطأ في جلب البيانات."
 
 def get_or_create_sheet(project):
    try:
@@ -117,21 +155,6 @@ def get_or_create_sheet(project):
        ws = sh.add_worksheet(title=project, rows=1000, cols=10)
        ws.append_row(["سؤال", "جواب", "اسم الوحدة", "عدد الامتار", "سعر المتر"])
    return ws
-
-def write_unit_to_sheet(project, unit_name, meters, price_per_meter):
-   try:
-       ws = get_or_create_sheet(project)
-       data = ws.get_all_values()
-       for i, row in enumerate(data):
-           if len(row) >= 3 and row[2].strip() == unit_name.strip():
-               ws.update_cell(i+1, 3, unit_name)
-               ws.update_cell(i+1, 4, meters)
-               ws.update_cell(i+1, 5, price_per_meter)
-               return True
-       ws.insert_row(["", "", unit_name, meters, price_per_meter], 2)
-       return True
-   except:
-       return False
 
 def write_to_sheet(project, field, value):
    try:
@@ -151,14 +174,9 @@ def get_project_data(project_name):
        ws = sh.worksheet(project_name)
        data = ws.get_all_values()
        result = ""
-       units = []
        for row in data[1:]:
            if len(row) >= 2 and row[0] and row[1]:
                result += f"{row[0]}: {row[1]}\n"
-           if len(row) >= 5 and row[2]:
-               units.append(f"وحدة {row[2]}: {row[3]} متر - {row[4]} جنيه للمتر")
-       if units:
-           result += "\nالوحدات:\n" + "\n".join(units)
        return result
    except:
        return ""
@@ -236,7 +254,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
    chat_history[user_id] = []
    await update.message.reply_text(
        "مرحباً بك في معمار دجلة!\n\n"
-       "أنا مساعدك في فريق المبيعات، يمكنني مساعدتك في:\n"
+       "يمكنني مساعدتك في:\n"
        "• الاستفسار عن الوحدات المتاحة\n"
        "• إنشاء إعلانات وسكريبتات احترافية\n"
        "• تسجيل المبيعات ومعلومات المشاريع\n\n"
@@ -262,10 +280,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 تفاصيل العميل: {request}
 الأسلوب: {style_name} - {style_instruction}
 اكتب سكريبت واتساب بأسلوب مصري راقٍ وطبيعي.
-- افتتاحية تشد الانتباه
-- معلومات المشروع بشكل سلس
-- نهاية تدفعه للتواصل
-- لا تذكر أي اسم غير معمار دجلة"""
+افتتاحية تشد الانتباه + معلومات سلسة + نهاية تدفعه للتواصل.
+لا تذكر أي اسم غير معمار دجلة."""
 
    response = client.messages.create(
        model="claude-haiku-4-5-20251001",
@@ -326,76 +342,39 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
        except:
            pass
 
-   if "تفاصيل" in user_message:
-       for p in AV_PROJECTS:
-           if p.lower() in user_message.lower():
-               details = get_project_details(p)
-               await update.message.reply_text(details)
-               return
+   detected_project = detect_project(user_message)
+   msg_lower = user_message.lower()
 
-   keywords_av = ["متاح", "available", "فاضي", "كام وحدة", "وحدات متاحة", "ايه المتاح", "المتاح", "الاتاحه", "الإتاحة"]
-   if any(k in user_message.lower() for k in keywords_av):
-       project_filter = None
-       for p in AV_PROJECTS:
-           if p.lower() in user_message.lower():
-               project_filter = p
-               break
-       if not project_filter:
-           for alias, real in [("d12", "D12 Medical"), ("d11", "D11 BUSINESS"), ("waterway", "WW"), ("ww1", "WW1"), ("ww2", "WW2"), ("tijan", "TIJAN"), ("midst", "MIDST"), ("stage x", "STAGE X")]:
-               if alias in user_message.lower():
-                   project_filter = real
-                   break
-       if project_filter:
-           details = get_project_details(project_filter)
-           await update.message.reply_text(details)
-       else:
-           summary, _ = get_summary_and_details()
-           await update.message.reply_text(summary)
+   keywords_status = ["كام وحدة", "وحدات", "متاح", "reserved", "hold", "الوضع", "status", "احصائيه", "احصائية", "ايه الوضع", "كام"]
+   keywords_all = ["كل المشاريع", "كل حاجه", "الكل", "جميع المشاريع", "overview"]
+
+   if any(k in msg_lower for k in keywords_all):
+       results = get_project_status()
+       text = format_status(results)
+       await update.message.reply_text(f"📊 *ملخص جميع المشاريع*\n\n{text}", parse_mode="Markdown")
        return
 
-   project_data = ""
-   detected_project = ""
-   for p in PROJECTS:
-       if p.lower() in user_message.lower():
-           project_data = get_project_data(p)
-           detected_project = p
-           break
-   if not detected_project:
-       aliases = {"d12": "D12 Medical", "d11": "D11 BUSINESS", "waterway": "WW1", "ww1": "WW1", "ww2": "WW2", "tijan": "TIJAN", "midst": "MIDST", "stage x": "STAGE X"}
-       for alias, real in aliases.items():
-           if alias in user_message.lower():
-               detected_project = real
-               project_data = get_project_data(real)
-               break
+   if any(k in msg_lower for k in keywords_status):
+       if detected_project:
+           results = get_project_status(detected_project)
+           text = format_status(results)
+           if "available" in msg_lower or "متاح" in msg_lower:
+               units = get_available_units(detected_project)
+               await update.message.reply_text(f"📊 *{detected_project}*\n\n{text}\n{units}", parse_mode="Markdown")
+           else:
+               await update.message.reply_text(f"📊 *{detected_project}*\n\n{text}", parse_mode="Markdown")
+       else:
+           results = get_project_status()
+           text = format_status(results)
+           await update.message.reply_text(f"📊 *ملخص جميع المشاريع*\n\n{text}", parse_mode="Markdown")
+       return
 
-   if "وحدة" in user_message and detected_project:
-       system = """استخرج من الرسالة معلومات الوحدة وأرجع JSON فقط:
-{"action":"unit","project":"اسم المشروع","unit_name":"اسم الوحدة","meters":"المساحة","price_per_meter":"سعر المتر"}"""
-       response = client.messages.create(
-           model="claude-haiku-4-5-20251001",
-           max_tokens=200,
-           system=system,
-           messages=[{"role": "user", "content": user_message}]
-       )
-       reply = response.content[0].text.strip()
-       try:
-           data = json.loads(reply[reply.find("{"):reply.rfind("}")+1])
-           if data.get("action") == "unit":
-               write_unit_to_sheet(data["project"], data["unit_name"], data["meters"], data["price_per_meter"])
-               await update.message.reply_text(
-                   f"✅ تم إضافة الوحدة\n"
-                   f"الوحدة: {data['unit_name']}\n"
-                   f"المساحة: {data['meters']} م²\n"
-                   f"سعر المتر: {data['price_per_meter']} جنيه"
-               )
-           return
-       except:
-           pass
+   project_data = get_project_data(detected_project) if detected_project else ""
 
    if "سكريبت" in user_message:
-       user_context[user_id] = {"project": detected_project, "request": user_message}
+       user_context[user_id] = {"project": detected_project or "", "request": user_message}
        await update.message.reply_text(
-           f"سكريبت {detected_project} - اختر الأسلوب:",
+           f"سكريبت {detected_project or ''} - اختر الأسلوب:",
            reply_markup=get_style_buttons()
        )
        return
@@ -418,28 +397,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
    add_to_history(user_id, "user", user_message)
 
-   av_context = ""
-   if detected_project:
-       units = get_project_details(detected_project)
-       av_context = f"\nالوحدات المتاحة:\n{units}"
-
    system = f"""أنت مساعد فريق مبيعات شركة معمار دجلة للتطوير العقاري.
 تتحدث بأسلوب مصري راقٍ وطبيعي.
 اسم الشركة دائماً "معمار دجلة" فقط.
 
-معلومات الشركة:
 {COMPANY_INFO}
 
-المشاريع في النظام: {", ".join(PROJECTS)}
+المشاريع: {", ".join(PROJECTS)}
 {f"معلومات {detected_project}:{chr(10)}{project_data}" if project_data else ""}
-{av_context}
 
 إذا أراد إضافة معلومة - أرجع JSON فقط:
 {{"action":"save","project":"اسم","fields":[{{"field":"حقل","value":"قيمة"}}]}}
-إذا سأل - أجب بشكل طبيعي ومختصر متذكرا سياق المحادثة."""
+إذا سأل - أجب بشكل طبيعي ومختصر."""
 
    history = get_history(user_id)
-
    response = client.messages.create(
        model="claude-haiku-4-5-20251001",
        max_tokens=800,
@@ -447,7 +418,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
        messages=history
    )
    reply = response.content[0].text.strip()
-
    add_to_history(user_id, "assistant", reply)
 
    if '"action"' in reply and '"save"' in reply:
