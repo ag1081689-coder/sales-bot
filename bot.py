@@ -25,6 +25,26 @@ def get_or_create_sheet(project):
        ws.append_row(["سؤال", "جواب", "اسم الوحدة", "عدد الامتار", "سعر المتر"])
    return ws
 
+def write_unit_to_sheet(project, unit_name, meters, price_per_meter):
+   try:
+       ws = get_or_create_sheet(project)
+       data = ws.get_all_values()
+       
+       # ابحث لو الوحدة موجودة وعدلها
+       for i, row in enumerate(data):
+           if len(row) >= 3 and row[2].strip() == unit_name.strip():
+               ws.update_cell(i+1, 3, unit_name)
+               ws.update_cell(i+1, 4, meters)
+               ws.update_cell(i+1, 5, price_per_meter)
+               return True
+       
+       # لو مش موجودة - حطها بعد الهيدر مباشرة (صف 2)
+       # حرك كل الصفوف نزل
+       ws.insert_row(["", "", unit_name, meters, price_per_meter], 2)
+       return True
+   except:
+       return False
+
 def write_to_sheet(project, field, value):
    try:
        ws = get_or_create_sheet(project)
@@ -34,21 +54,6 @@ def write_to_sheet(project, field, value):
                ws.update_cell(i+1, 2, value)
                return True
        ws.append_row([field, value])
-       return True
-   except:
-       return False
-
-def write_unit_to_sheet(project, unit_name, meters, price_per_meter):
-   try:
-       ws = get_or_create_sheet(project)
-       data = ws.get_all_values()
-       for i, row in enumerate(data):
-           if len(row) >= 3 and row[2].strip() == unit_name.strip():
-               ws.update_cell(i+1, 3, unit_name)
-               ws.update_cell(i+1, 4, meters)
-               ws.update_cell(i+1, 5, price_per_meter)
-               return True
-       ws.append_row(["", "", unit_name, meters, price_per_meter])
        return True
    except:
        return False
