@@ -10,6 +10,68 @@ AV_SHEET_ID = "1f-1lkgr7nGiQofoREnhfbszjaJFu17OtZaMJ09_sLWw"
 PROJECTS = ["D11", "D12", "Metro Degla", "Medist", "Tigan", "Waterway 1", "Waterway 2", "Stage X"]
 SECRET_PASSWORD = os.environ.get("SECRET_PASSWORD", "Adel2026")
 
+COMPANY_INFO = """
+معمار دجلة للتطوير العقاري - MEMAAR DEGLA DEVELOPMENT
+تأسست: 2019 في العاشر من رمضان
+فريق: أكثر من 65 متخصص
+التمويل: ذاتي بالكامل
+الموقع: memaardegla.com | 15409
+
+المؤسسون:
+- أ/ أحمد عبد العزيز
+- م/ معاذ باشا
+- أ/ محمد خليل
+
+رسالة الشركة: البناء على الأرض من خلال منتجاتها العقارية والخدمية، وخلق بيئة خدمية واستثمارية جاذبة داخل جمهورية مصر العربية.
+
+رؤية الشركة: السعي نحو قمة مجالها والسيطرة على السوق في مصر من خلال تنويع مشاريعها واستهداف شرائح متميزة على المدى الطويل.
+
+المشاريع المنفذة:
+1. Degla One Mall - المشروع الأول (2019-2021) - مكتمل
+  - مساحة: 2326 م²
+  - 48 وحدة (25 تجاري + 11 إداري + 12 سكني)
+
+2. Sky Degla Mall - المشروع الثاني (2020-2023) - مكتمل
+  - مساحة: 4050 م²
+  - 233 وحدة (116 تجاري + 78 إداري + 39 طبي)
+  - أمام الموقف الإقليمي الجديد والداخلي للمدينة
+  - على طريق مصر النور تقاطع امتداد الأردنية
+
+المشاريع قيد التنفيذ:
+3. Metro Degla - المشروع الثالث (2022)
+  - مساحة: 14,707 م²
+  - 396 وحدة (231 تجاري + 87 إداري + 78 طبي)
+
+4. Stage X - المشروع الرابع (2022)
+  - مساحة: 11,969 م²
+  - 96 وحدة تجارية
+
+5. Midst Degla Mall - المشروع الخامس (2022)
+  - مساحة: 2,060 م²
+  - 99 وحدة (54 تجاري + 45 طبي)
+
+6. Tijan Mall - المشروع السادس (2024)
+  - مساحة: 2,700 م²
+  - 136 وحدة (76 تجاري + 20 إداري + 40 طبي)
+
+7. Metro Plus Mall - المشروع السابع (2024)
+  - مساحة: 1,800 م²
+  - 163 وحدة (91 تجاري + 48 إداري + 24 طبي)
+
+8. Waterway Degla Mall - المشروع الثامن (2025)
+  - مساحة: 10,000 م²
+  - 188 وحدة (95 تجاري + 54 إداري + 39 طبي)
+
+مزايا الشركة:
+- أول شركة تطوير عقاري تغير الطابع العمراني التقليدي لمدينة العاشر من رمضان
+- مواقع استراتيجية بحركة سكانية مرتفعة
+- التزام بالتسليم طبقاً للمواصفات والجدول الزمني المتفق عليه
+- سمعة ممتازة داخل وخارج المدينة
+- توفر الواجهات المميزة للاستثمار
+
+خدمات الشركة: قانونية، IT، تشغيل، صيانة، تسويق، أحداث ترويجية، مبيعات، أمن، نظافة
+"""
+
 creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
 gc = gspread.service_account_from_dict(creds_json)
 sh = gc.open_by_key(SHEET_ID)
@@ -49,23 +111,33 @@ def get_availability_data():
    except:
        return []
 
-def search_units(status_filter=None, project_filter=None):
+def get_summary_and_details(project_filter=None):
    all_data = get_availability_data()
-   results = []
-   for unit in all_data:
-       if status_filter and unit["status"].lower() != status_filter.lower():
-           continue
-       if project_filter and project_filter.lower() not in unit["project"].lower() and project_filter.lower() not in unit["sheet"].lower() and project_filter.lower() not in unit["unit"].lower():
-           continue
-       results.append(unit)
-   return results[:15]
+   available = [u for u in all_data if u["status"].lower() == "available"]
+   if project_filter:
+       available = [u for u in available if project_filter.lower() in u["sheet"].lower() or project_filter.lower() in u["project"].lower()]
 
-def format_units(units):
-   if not units:
-       return "لا توجد وحدات بهذه المواصفات حالياً."
-   result = ""
-   for u in units:
-       result += f"• {u['unit']} | {u['area']}م² | إجمالي {u['total']} جنيه | مقدم {u['down_payment']} | {u['status']}\n"
+   summary = {}
+   for u in available:
+       key = u["sheet"]
+       if key not in summary:
+           summary[key] = []
+       summary[key].append(u)
+
+   summary_text = "ملخص الوحدات المتاحة في معمار دجلة:\n\n"
+   for project, units in summary.items():
+       summary_text += f"• {project}: {len(units)} وحدة\n"
+   summary_text += "\nللتفاصيل اكتب: تفاصيل [اسم المشروع]"
+   return summary_text, summary
+
+def get_project_details(project_filter):
+   all_data = get_availability_data()
+   available = [u for u in all_data if u["status"].lower() == "available" and (project_filter.lower() in u["sheet"].lower() or project_filter.lower() in u["project"].lower())]
+   if not available:
+       return "لا توجد وحدات متاحة في هذا المشروع حالياً."
+   result = f"الوحدات المتاحة في {project_filter}:\n\n"
+   for u in available:
+       result += f"• {u['unit']} | {u['area']}م² | إجمالي {u['total']} جنيه | مقدم {u['down_payment']}\n"
    return result
 
 def get_or_create_sheet(project):
@@ -193,8 +265,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
    user_id = update.message.from_user.id
    chat_history[user_id] = []
    await update.message.reply_text(
-       "مرحباً! أنا مساعد فريق المبيعات.\n\n"
-       "يمكنني مساعدتك في:\n"
+       "مرحباً بك في معمار دجلة!\n\n"
+       "أنا مساعدك في فريق المبيعات، يمكنني مساعدتك في:\n"
        "• الاستفسار عن الوحدات المتاحة\n"
        "• إنشاء إعلانات وسكريبتات احترافية\n"
        "• تسجيل المبيعات ومعلومات المشاريع\n\n"
@@ -214,17 +286,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
    request = saved.get("request", "")
    project_data = get_project_data(project) if project else ""
 
-   system = f"""أنت خبير تسويق عقاري متخصص في السوق المصري.
-اكتب سكريبت واتساب احترافي بالعربية السلسة المناسبة للتواصل مع العملاء.
+   system = f"""أنت خبير تسويق عقاري في شركة معمار دجلة.
+معلومات الشركة: {COMPANY_INFO}
 معلومات المشروع: {project_data}
 تفاصيل العميل: {request}
 الأسلوب: {style_name} - {style_instruction}
-القواعد:
-- افتتاحية تشد الانتباه فوراً
-- معلومات المشروع بشكل طبيعي وغير ممل
-- نهاية تدفعه لاتخاذ قرار
-- أسلوب راقٍ يليق بسوق العقارات
-- مناسب للإرسال على واتساب"""
+اكتب سكريبت واتساب بأسلوب مصري راقٍ وطبيعي.
+- افتتاحية تشد الانتباه
+- معلومات المشروع بشكل سلس
+- نهاية تدفعه للتواصل
+- لا تذكر أي اسم غير معمار دجلة"""
 
    response = client.messages.create(
        model="claude-haiku-4-5-20251001",
@@ -285,17 +356,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
        except:
            pass
 
-   keywords_av = ["متاح", "available", "فاضي", "فيه وحدة", "كام وحدة", "وحدات متاحة", "ايه المتاح", "المتاح"]
+   if "تفاصيل" in user_message:
+       for p in ["WW1", "WW2", "D11", "D12", "TIJAN", "MIDST", "STAGE X"]:
+           if p.lower() in user_message.lower():
+               details = get_project_details(p)
+               await update.message.reply_text(details)
+               return
+
+   keywords_av = ["متاح", "available", "فاضي", "كام وحدة", "وحدات متاحة", "ايه المتاح", "المتاح", "الاتاحه", "الإتاحة"]
    if any(k in user_message.lower() for k in keywords_av):
        project_filter = None
        for p in ["WW1", "WW2", "D11", "D12", "TIJAN", "MIDST", "STAGE X"]:
            if p.lower() in user_message.lower():
                project_filter = p
                break
-       units = search_units(status_filter="available", project_filter=project_filter)
-       formatted = format_units(units)
-       header = f"الوحدات المتاحة{f' في {project_filter}' if project_filter else ''}:\n\n"
-       await update.message.reply_text(header + formatted)
+       if project_filter:
+           details = get_project_details(project_filter)
+           await update.message.reply_text(details)
+       else:
+           summary, _ = get_summary_and_details()
+           await update.message.reply_text(summary)
        return
 
    project_data = ""
@@ -339,10 +419,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
        return
 
    if "اعلان" in user_message or "إعلان" in user_message:
-       system = f"""أنت خبير تسويق عقاري. اكتب 3 صيغ إعلانية مختلفة باللهجة المصرية الراقية.
+       system = f"""أنت خبير تسويق عقاري في معمار دجلة.
+معلومات الشركة: {COMPANY_INFO}
 معلومات المشروع: {project_data}
-لكل إعلان: افتتاحية جذابة + معلومات المشروع + دعوة للتواصل.
-احترافي ومناسب لسوق العقارات."""
+اكتب 3 صيغ إعلانية مختلفة بأسلوب مصري راقٍ.
+كل إعلان: افتتاحية جذابة + معلومات + call to action.
+لا تذكر أي اسم غير معمار دجلة."""
        response = client.messages.create(
            model="claude-haiku-4-5-20251001",
            max_tokens=1200,
@@ -352,24 +434,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
        await update.message.reply_text(response.content[0].text)
        return
 
-   units_context = ""
-   for p in ["WW1", "WW2", "D11", "D12", "TIJAN", "MIDST", "STAGE X"]:
-       if p.lower() in user_message.lower():
-           units = search_units(project_filter=p)
-           if units:
-               units_context = f"\nالوحدات في {p}:\n" + format_units(units)
-           break
-
    add_to_history(user_id, "user", user_message)
 
-   system = f"""أنت مساعد فريق مبيعات عقاري محترف في شركة ممار دجلة.
-تتحدث بأسلوب طبيعي واحترافي - لا عامية مبالغة ولا رسمية زائدة.
-المشاريع المتاحة: {", ".join(PROJECTS)}
-{f"معلومات {detected_project}:{chr(10)}{project_data}" if project_data else ""}
-{units_context}
-إذا أراد إضافة معلومة جديدة - أرجع JSON فقط:
+   system = f"""أنت مساعد فريق مبيعات شركة معمار دجلة للتطوير العقاري.
+تتحدث بأسلوب مصري راقٍ وطبيعي - لا عامية مبالغة ولا رسمية زائدة.
+اسم الشركة دائماً "معمار دجلة" فقط.
+
+معلومات الشركة الكاملة:
+{COMPANY_INFO}
+
+المشاريع في النظام: {", ".join(PROJECTS)}
+{f"معلومات إضافية عن {detected_project}:{chr(10)}{project_data}" if project_data else ""}
+
+إذا أراد إضافة معلومة - أرجع JSON فقط:
 {{"action":"save","project":"اسم","fields":[{{"field":"حقل","value":"قيمة"}}]}}
-إذا كان يسأل - أجب بشكل طبيعي ومختصر ومتذكر سياق المحادثة."""
+إذا سأل - أجب بشكل طبيعي ومختصر متذكراً سياق المحادثة."""
 
    history = get_history(user_id)
 
