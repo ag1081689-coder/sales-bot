@@ -7,6 +7,7 @@ from telegram.ext import Application, MessageHandler, CommandHandler, CallbackQu
 
 SHEET_ID = "1x5CfKVrgXZy1-1yVPoqAwcS0KpxeOyzxfA8shDt2qkw"
 PROJECTS = ["D11", "D12", "Metro Degla", "Medist", "Tigan", "Waterway 1", "Waterway 2", "Stage X"]
+SECRET_PASSWORD = os.environ.get("SECRET_PASSWORD", "Adel2026")
 
 creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
 gc = gspread.service_account_from_dict(creds_json)
@@ -28,6 +29,40 @@ def write_to_sheet(project, field, value):
        return True
    except:
        return False
+
+def save_sale(project, unit, price, client_name):
+   try:
+       try:
+           ws = sh.worksheet("المبيعات")
+       except:
+           ws = sh.add_worksheet(title="المبيعات", rows=1000, cols=10)
+           ws.append_row(["المشروع", "الوحدة", "السعر", "اسم العميل", "التاريخ"])
+       from datetime import datetime
+       date = datetime.now().strftime("%Y-%m-%d %H:%M")
+       ws.append_row([project, unit, price, client_name, date])
+       return True
+   except:
+       return False
+
+def get_sales_data():
+   try:
+       ws = sh.worksheet("المبيعات")
+       data = ws.get_all_values()
+       if len(data) <= 1:
+           return "مفيش مبيعات مسجلة لحد دلوقتي"
+       result = ""
+       total = 0
+       for row in data[1:]:
+           if len(row) >= 4:
+               result += f"• {row[0]} - {row[1]} - {row[2]} - {row[3]} - {row[4]}\n"
+               try:
+                   price = float(row[2].replace(",", "").replace("مليون", "000000").replace(" ", ""))
+                   total += price
+               except:
+                   pass
+       return result
+   except:
+       return "مفيش مبيعات مسجلة"
 
 def get_project_data(project_name):
    try:
@@ -77,36 +112,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
    query = update.callback_query
    await query.answer()
-   
    user_id = query.from_user.id
    style_key = query.data
-   
    if style_key not in STYLES:
        return
-   
    style_name, style_instruction = STYLES[style_key]
    saved = user_context.get(user_id, {})
    project = saved.get("project", "")
    request = saved.get("request", "")
    project_data = get_project_data(project) if project else ""
-   
+
    system = f"""انت كونتنت كرييتور متخصص في العقارات المصرية.
 اكتب سكريبت واتساب احترافي وشيك بالعربية البسيطة الطبيعية.
-
-معلومات المشروع:
-{project_data}
-
+معلومات المشروع: {project_data}
 تفاصيل العميل: {request}
-
-الأسلوب المطلوب: {style_name} - {style_instruction}
-
-قواعد الكتابة:
-- Hook يخطف الانتباه في السطر الأول
-- جسم الرسالة فيه المعلومات بشكل طبيعي مش ممل
-- نهاية تخليه ياخد اكشن
-- الأسلوب شيك ومحترم يليق بالعقارات
-- مش طويل ومش قصير - مناسب لواتساب
-- بدون مبالغة أو كلام فاضي"""
+الاسلوب: {style_name} - {style_instruction}
+قواعد: Hook يخطف في السطر الاول، معلومات طبيعية مش ممله، نهاية تخليه ياخد اكشن، شيك ومحترم، مناسب لواتساب."""
 
    response = client.messages.create(
        model="claude-haiku-4-5-20251001",
@@ -114,15 +135,52 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
        system=system,
        messages=[{"role": "user", "content": f"اكتب سكريبت {style_name} لمشروع {project}"}]
    )
-   
-   await query.edit_message_text(
-       f"*سكريبت {style_name} - {project}*\n\n{response.content[0].text}",
-       parse_mode="Markdown"
-   )
+   await query.edit_message_text(f"*سكريبت {style_name} - {project}*\n\n{response.content[0].text}", parse_mode="Markdown")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
    user_message = update.message.text.strip()
    user_id = update.message.from_user.id
+
+   if user_context.get(user_id, {}).get("waiting_password"):
+       if user_message == SECRET_PASSWORD:
+           user_context[user_id]["waiting_password"] = False
+           user_context[user_id]["authenticated"] = True
+           sales = get_sales_data()
+           await update.message.reply_text(f"المبيعات:\n\n{sales}")
+       else:
+           await update.message.reply_text("كلمة السر غلط")
+       return
+
+   if "مبيعات" in user_message or "بايعين" in user_message or "احنا بعنا" in user_message:
+       if user_context.get(user_id, {}).get("authenticated"):
+           sales = get_sales_data()
+           await update.message.reply_text(f"المبيعات:\n\n{sales}")
+       else:
+           user_context[user_id] = {"waiting_password": True}
+           await update.message.reply_text("اكتب كلمة السر:")
+       return
+
+   if "بيعة" in user_message or "بعنا" in user_message or "اتباع" in user_message:
+       system = f"""استخرج من الرسالة دي معلومات البيعة وارجع JSON فقط:
+{{"action":"sale","project":"اسم المشروع","unit":"الوحدة","price":"السعر","client":"اسم العميل"}}
+الرسالة: {user_message}"""
+       response = client.messages.create(
+           model="claude-haiku-4-5-20251001",
+           max_tokens=200,
+           system=system,
+           messages=[{"role": "user", "content": user_message}]
+       )
+       reply = response.content[0].text.strip()
+       try:
+           start_idx = reply.find("{")
+           end_idx = reply.rfind("}") + 1
+           data = json.loads(reply[start_idx:end_idx])
+           if data.get("action") == "sale":
+               save_sale(data["project"], data["unit"], data["price"], data["client"])
+               await update.message.reply_text(f"تم تسجيل البيعة ✅\n{data['project']} - {data['unit']} - {data['price']} - {data['client']}")
+           return
+       except:
+           pass
 
    project_data = ""
    detected_project = ""
@@ -133,23 +191,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
            break
 
    if "سكريبت" in user_message:
-       user_context[user_id] = {
-           "project": detected_project,
-           "request": user_message
-       }
-       await update.message.reply_text(
-           f"تمام! سكريبت {detected_project} - اختار الأسلوب:",
-           reply_markup=get_style_buttons()
-       )
+       user_context[user_id] = {"project": detected_project, "request": user_message}
+       await update.message.reply_text(f"تمام! سكريبت {detected_project} - اختار الاسلوب:", reply_markup=get_style_buttons())
        return
 
    if "اعلان" in user_message or "إعلان" in user_message:
-       system = f"""انت كونتنت كرييتور متخصص في العقارات المصرية.
-اكتب 3 صيغ إعلانية مختلفة بالعامية المصرية الشيك.
+       system = f"""انت كونتنت كرييتور عقاري مصري. اكتب 3 صيغ اعلانية مختلفة شيك بالعامية المصرية.
 معلومات المشروع: {project_data}
-كل إعلان فيه hook يخطف، معلومات المشروع، وcall to action قوي.
-احترافي ويليق بالعقارات."""
-
+كل اعلان: hook يخطف + معلومات طبيعية + call to action. احترافي يليق بالعقارات."""
        response = client.messages.create(
            model="claude-haiku-4-5-20251001",
            max_tokens=1200,
@@ -158,9 +207,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
        )
        await update.message.reply_text(response.content[0].text)
        return
-
-   if '"action"' in user_message and '"save"' in user_message:
-       pass
 
    system = f"""انت سيلز عقاري مصري محترف بتكلم زميلك بالعامية المصرية.
 المشاريع: {", ".join(PROJECTS)}
@@ -175,7 +221,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
        system=system,
        messages=[{"role": "user", "content": user_message}]
    )
-
    reply = response.content[0].text.strip()
 
    if '"action"' in reply and '"save"' in reply:
