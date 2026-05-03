@@ -35,6 +35,7 @@ COMPANY_INFO = """
 فريق: أكثر من 65 متخصص - تمويل ذاتي بالكامل
 الموقع: memaardegla.com | 15409
 المؤسسون: أ/ أحمد عبد العزيز | م/ معاذ باشا | أ/ محمد خليل
+ملاحظة: جميع وحدات معمار دجلة إدارية أو تجارية أو طبية - لا توجد وحدات سكنية.
 """
 
 creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
@@ -59,12 +60,77 @@ def detect_project(text):
 
 def extract_area(text):
    import re
-   patterns = [r'(\d+)\s*متر', r'(\d+)\s*م', r'(\d+)\s*sqm', r'مساحت[هة]\s*(\d+)', r'(\d+)\s*m']
+   patterns = [r'(\d+)\s*متر', r'(\d+)\s*م²', r'(\d+)\s*م ', r'مساحت[هة]\s*(\d+)', r'(\d+)\s*sqm']
    for pattern in patterns:
-       match = re.search(pattern, text.lower())
+       match = re.search(pattern, text)
        if match:
            return int(match.group(1))
    return None
+
+def detect_unit_code(text):
+   import re
+   pattern = r'\b([A-Za-z]{1,3}\s*\d+\s*[A-Za-z]?\d*)\b'
+   matches = re.findall(pattern, text)
+   if matches:
+       return matches[0].strip()
+   return None
+
+def get_unit_details(unit_code):
+   try:
+       results = []
+       for ws in av_sh.worksheets():
+           data = ws.get_all_values()
+           for row in data:
+               if len(row) < 3:
+                   continue
+               if row[2].strip().upper() == unit_code.strip().upper():
+                   status = ""
+                   for cell in row:
+                       if cell.strip().lower() in ["available", "reserved", "hold"]:
+                           status = cell.strip()
+                           break
+                   results.append({
+                       "sheet": ws.title,
+                       "unit": row[2],
+                       "area": row[3] if len(row) > 3 else "",
+                       "price": row[4] if len(row) > 4 else "",
+                       "total": row[5] if len(row) > 5 else "",
+                       "project": row[6] if len(row) > 6 else "",
+                       "status": status,
+                       "down": row[8] if len(row) > 8 else "",
+                       "instalments": row[9] if len(row) > 9 else "",
+                       "cash_discount": row[10] if len(row) > 10 else ""
+                   })
+       return results
+   except:
+       return []
+
+def get_unit_codes(project_filter=None, status_filter=None):
+   try:
+       results = {}
+       for ws in av_sh.worksheets():
+           if project_filter and project_filter.lower() not in ws.title.lower():
+               continue
+           data = ws.get_all_values()
+           codes = []
+           for row in data:
+               if len(row) < 3 or not row[2].strip():
+                   continue
+               row_status = ""
+               for cell in row:
+                   if cell.strip().lower() in ["available", "reserved", "hold"]:
+                       row_status = cell.strip().lower()
+                       break
+               if not row_status:
+                   continue
+               if status_filter and row_status != status_filter:
+                   continue
+               codes.append(f"{row[2]} ({row_status})")
+           if codes:
+               results[ws.title] = codes
+       return results
+   except:
+       return {}
 
 def get_all_units(project_filter=None, status_filter=None, area_filter=None):
    try:
@@ -77,11 +143,9 @@ def get_all_units(project_filter=None, status_filter=None, area_filter=None):
                if len(row) < 8:
                    continue
                row_status = ""
-               status_col = -1
-               for i, cell in enumerate(row):
+               for cell in row:
                    if cell.strip().lower() in ["available", "reserved", "hold"]:
                        row_status = cell.strip().lower()
-                       status_col = i
                        break
                if not row_status:
                    continue
@@ -122,11 +186,9 @@ def get_project_status(project_filter=None):
            counts = {"available": 0, "reserved": 0, "hold": 0}
            for row in data:
                for cell in row:
-                   cell_lower = cell.strip().lower()
-                   if cell_lower in counts:
-                       counts[cell_lower] += 1
-           total = sum(counts.values())
-           if total > 0:
+                   if cell.strip().lower() in counts:
+                       counts[cell.strip().lower()] += 1
+           if sum(counts.values()) > 0:
                results[ws.title] = counts
        return results
    except:
@@ -239,12 +301,12 @@ def get_style_buttons():
    return InlineKeyboardMarkup(keyboard)
 
 STYLES = {
-   "style_pain": ("Pain Point", "ابدأ بمشكلة العميل وألمه"),
-   "style_compare": ("المقارنة", "قارن بين الإيجار والشراء بالأرقام"),
-   "style_fomo": ("FOMO", "ضغط الوقت والندرة بأسلوب راقي"),
-   "style_roi": ("ROI والأرقام", "احسبله العائد بالأرقام"),
-   "style_story": ("القصة", "قصة عميل حقيقي نجح"),
-   "style_social": ("Social Proof", "أرقام مبيعات وشهادات"),
+   "style_pain": ("Pain Point", "ابدأ بمشكلة العميل"),
+   "style_compare": ("المقارنة", "قارن بين الإيجار والشراء"),
+   "style_fomo": ("FOMO", "ضغط الوقت والندرة"),
+   "style_roi": ("ROI والأرقام", "احسبله العائد"),
+   "style_story": ("القصة", "قصة عميل نجح"),
+   "style_social": ("Social Proof", "أرقام وشهادات"),
    "style_exclusive": ("Exclusivity", "الحصرية والندرة")
 }
 
@@ -264,7 +326,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
    await update.message.reply_text(
        "مرحباً بك في معمار دجلة!\n\n"
        "يمكنني مساعدتك في:\n"
-       "• الاستفسار عن الوحدات المتاحة\n"
+       "• الاستفسار عن الوحدات والأكواد\n"
        "• فلترة الوحدات بالمساحة والحالة\n"
        "• إنشاء إعلانات وسكريبتات\n"
        "• تسجيل المبيعات\n\n"
@@ -289,7 +351,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 معلومات المشروع: {project_data}
 تفاصيل العميل: {request}
 الأسلوب: {style_name} - {style_instruction}
-اكتب سكريبت واتساب بأسلوب مصري راقٍ. افتتاحية جذابة + معلومات سلسة + نهاية للتواصل.
+اكتب سكريبت واتساب بأسلوب مصري راقٍ.
 لا تذكر أي اسم غير معمار دجلة."""
 
    response = client.messages.create(
@@ -352,15 +414,55 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
    detected_project = detect_project(user_message)
    area_filter = extract_area(user_message)
+   unit_code = detect_unit_code(user_message)
 
-   keywords_all = ["كل المشاريع", "كل حاجه", "الكل", "جميع", "overview", "كل الاتاحه"]
-   keywords_status = ["كام وحدة", "وحدات", "متاح", "reserved", "hold", "الوضع", "status", "احصائيه", "احصائية", "ايه الوضع", "كام", "إتاحة", "اتاحة", "اتاحه"]
+   # البحث عن وحدة بكودها
+   if unit_code and not any(k in msg_lower for k in ["اكواد", "كود", "codes"]):
+       units = get_unit_details(unit_code)
+       if units:
+           u = units[0]
+           status_emoji = "✅" if u["status"] == "available" else "🔴" if u["status"] == "reserved" else "🔵"
+           text = f"*تفاصيل الوحدة {u['unit']}*\n\n"
+           text += f"المشروع: {u['sheet']}\n"
+           text += f"المساحة: {u['area']}م²\n"
+           text += f"سعر المتر: {u['price']} جنيه\n"
+           text += f"الإجمالي: {u['total']} جنيه\n"
+           text += f"المقدم: {u['down']}\n"
+           text += f"الأقساط: {u['instalments']}\n"
+           text += f"خصم كاش: {u['cash_discount']}\n"
+           text += f"الحالة: {status_emoji} {u['status']}"
+           await update.message.reply_text(text, parse_mode="Markdown")
+           return
+
+   # عرض الأكواد
+   keywords_codes = ["اكواد", "كود", "codes", "أكواد"]
+   if any(k in msg_lower for k in keywords_codes):
+       status_filter = None
+       if "متاح" in msg_lower or "available" in msg_lower:
+           status_filter = "available"
+       elif "محجوز" in msg_lower or "reserved" in msg_lower:
+           status_filter = "reserved"
+       elif "hold" in msg_lower:
+           status_filter = "hold"
+       codes = get_unit_codes(detected_project, status_filter)
+       if codes:
+           text = f"*أكواد الوحدات{' في ' + detected_project if detected_project else ''}:*\n\n"
+           for project, c_list in codes.items():
+               text += f"*{project}:*\n"
+               text += " | ".join(c_list[:30]) + "\n\n"
+           await update.message.reply_text(text, parse_mode="Markdown")
+       else:
+           await update.message.reply_text("لا توجد وحدات بهذه المواصفات.")
+       return
+
+   keywords_all = ["كل المشاريع", "كل حاجه", "الكل", "جميع", "overview"]
+   keywords_status = ["كام وحدة", "وحدات", "متاح", "reserved", "hold", "الوضع", "احصائيه", "احصائية", "كام", "إتاحة", "اتاحة", "اتاحه"]
    keywords_available = ["متاح", "available", "فاضي", "المتاح"]
 
    if any(k in msg_lower for k in keywords_all) and not detected_project:
        if area_filter:
            units = get_all_units(area_filter=area_filter)
-           text = format_units(units, f"الوحدات ذات المساحة {area_filter}م² في جميع المشاريع:")
+           text = format_units(units, f"الوحدات ذات المساحة {area_filter}م²:")
            await update.message.reply_text(text, parse_mode="Markdown")
        else:
            results = get_project_status()
@@ -378,12 +480,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
            status_filter = "hold"
 
        if area_filter or status_filter:
-           units = get_all_units(
-               project_filter=detected_project,
-               status_filter=status_filter,
-               area_filter=area_filter
-           )
-           title = f"الوحدات"
+           units = get_all_units(project_filter=detected_project, status_filter=status_filter, area_filter=area_filter)
+           title = "الوحدات"
            if status_filter:
                title += f" {status_filter}"
            if area_filter:
@@ -413,7 +511,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
        system = f"""أنت خبير تسويق عقاري في معمار دجلة.
 {COMPANY_INFO}
 معلومات المشروع: {project_data}
-اكتب 3 صيغ إعلانية بأسلوب مصري راقٍ. افتتاحية + معلومات + call to action.
+اكتب 3 صيغ إعلانية بأسلوب مصري راقٍ.
 لا تذكر أي اسم غير معمار دجلة."""
        response = client.messages.create(
            model="claude-haiku-4-5-20251001",
@@ -428,6 +526,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
    system = f"""أنت مساعد فريق مبيعات شركة معمار دجلة.
 تتحدث بأسلوب مصري راقٍ وطبيعي. اسم الشركة دائماً "معمار دجلة" فقط.
+جميع الوحدات إدارية أو تجارية أو طبية - لا توجد وحدات سكنية.
 {COMPANY_INFO}
 المشاريع: {", ".join(PROJECTS)}
 {f"معلومات {detected_project}:{chr(10)}{project_data}" if project_data else ""}
