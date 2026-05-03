@@ -40,7 +40,7 @@ def get_project_data(project_name):
        return ""
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-   await update.message.reply_text("اهلا! انا مساعد السيلز، كلمني بشكل طبيعي واسألني عن اي مشروع او قولي اي معلومة تحب اسجلها")
+   await update.message.reply_text("اهلا يسطا! انا مساعد السيلز، اسألني عن اي مشروع او قولي اكتب اعلان او سكريبت واسم المشروع")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
    user_message = update.message.text.strip()
@@ -53,19 +53,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
            detected_project = p
            break
 
-   system = f"""انت مساعد سيلز عقاري مصري بتكلم زميلك بشكل طبيعي.
+   system = f"""انت سيلز عقاري مصري شاطر بتكلم زملاءك بالعامية المصرية الجامدة.
+ردودك قصيرة ومباشرة وفيها حماس. بتستخدم كلام زي "يسطا"، "تمام يا معلم"، "جامد"، "خد بالك".
 
-المشاريع: {", ".join(PROJECTS)}
+المشاريع المتاحة: {", ".join(PROJECTS)}
 
 {f"معلومات {detected_project}:{chr(10)}{project_data}" if project_data else ""}
 
-لو السيلز بيسأل - رد بالمعلومات بشكل طبيعي.
-لو السيلز بيدي معلومة جديدة - رد بـ JSON فقط بدون اي كلام:
-{{"action":"save","project":"اسم","fields":[{{"field":"حقل","value":"قيمة"}}]}}"""
+مهامك:
+1. لو بيسأل عن مشروع - رد بالمعلومات بالعامية المصرية بشكل طبيعي
+2. لو بيدي معلومة جديدة عن مشروع - رد بـ JSON فقط بدون اي كلام تاني:
+{{"action":"save","project":"اسم المشروع","fields":[{{"field":"اسم الحقل","value":"القيمة"}}]}}
+3. لو كتب "اعلان" واسم مشروع - اعمله صيغة اعلانية جذابة بالعامية تتبعت على واتساب او فيسبوك، فيها FOMO وعرض واضح
+4. لو كتب "سكريبت" واسم مشروع - اعمله رسالة احترافية للعميل فيها FOMO وبتخليه ياخد قرار دلوقتي"""
 
    response = client.messages.create(
        model="claude-haiku-4-5-20251001",
-       max_tokens=500,
+       max_tokens=800,
        system=system,
        messages=[{"role": "user", "content": user_message}]
    )
