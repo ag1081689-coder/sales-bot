@@ -17,9 +17,17 @@ client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
 user_context = {}
 
-def write_to_sheet(project, field, value):
+def get_or_create_sheet(project):
    try:
        ws = sh.worksheet(project)
+   except:
+       ws = sh.add_worksheet(title=project, rows=1000, cols=10)
+       ws.append_row(["سؤال", "جواب", "اسم الوحدة", "عدد الامتار", "سعر المتر"])
+   return ws
+
+def write_to_sheet(project, field, value):
+   try:
+       ws = get_or_create_sheet(project)
        data = ws.get_all_values()
        for i, row in enumerate(data):
            if row and row[0].strip() == field.strip():
@@ -29,6 +37,38 @@ def write_to_sheet(project, field, value):
        return True
    except:
        return False
+
+def write_unit_to_sheet(project, unit_name, meters, price_per_meter):
+   try:
+       ws = get_or_create_sheet(project)
+       data = ws.get_all_values()
+       for i, row in enumerate(data):
+           if len(row) >= 3 and row[2].strip() == unit_name.strip():
+               ws.update_cell(i+1, 3, unit_name)
+               ws.update_cell(i+1, 4, meters)
+               ws.update_cell(i+1, 5, price_per_meter)
+               return True
+       ws.append_row(["", "", unit_name, meters, price_per_meter])
+       return True
+   except:
+       return False
+
+def get_project_data(project_name):
+   try:
+       ws = sh.worksheet(project_name)
+       data = ws.get_all_values()
+       result = ""
+       units = []
+       for row in data[1:]:
+           if len(row) >= 2 and row[0] and row[1]:
+               result += f"{row[0]}: {row[1]}\n"
+           if len(row) >= 5 and row[2]:
+               units.append(f"وحدة {row[2]}: {row[3]} متر - {row[4]} جنيه للمتر")
+       if units:
+           result += "\nالوحدات المتاحة:\n" + "\n".join(units)
+       return result
+   except:
+       return ""
 
 def save_sale(project, unit, price, client_name):
    try:
@@ -51,30 +91,12 @@ def get_sales_data():
        if len(data) <= 1:
            return "مفيش مبيعات مسجلة لحد دلوقتي"
        result = ""
-       total = 0
        for row in data[1:]:
            if len(row) >= 4:
                result += f"• {row[0]} - {row[1]} - {row[2]} - {row[3]} - {row[4]}\n"
-               try:
-                   price = float(row[2].replace(",", "").replace("مليون", "000000").replace(" ", ""))
-                   total += price
-               except:
-                   pass
        return result
    except:
        return "مفيش مبيعات مسجلة"
-
-def get_project_data(project_name):
-   try:
-       ws = sh.worksheet(project_name)
-       data = ws.get_all_values()
-       result = ""
-       for row in data:
-           if len(row) >= 2:
-               result += f"{row[0]}: {row[1]}\n"
-       return result
-   except:
-       return ""
 
 def get_style_buttons():
    keyboard = [
@@ -162,8 +184,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
    if "بيعة" in user_message or "بعنا" in user_message or "اتباع" in user_message:
        system = f"""استخرج من الرسالة دي معلومات البيعة وارجع JSON فقط:
-{{"action":"sale","project":"اسم المشروع","unit":"الوحدة","price":"السعر","client":"اسم العميل"}}
-الرسالة: {user_message}"""
+{{"action":"sale","project":"اسم المشروع","unit":"الوحدة","price":"السعر","client":"اسم العميل"}}"""
        response = client.messages.create(
            model="claude-haiku-4-5-20251001",
            max_tokens=200,
@@ -172,9 +193,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
        )
        reply = response.content[0].text.strip()
        try:
-           start_idx = reply.find("{")
-           end_idx = reply.rfind("}") + 1
-           data = json.loads(reply[start_idx:end_idx])
+           data = json.loads(reply[reply.find("{"):reply.rfind("}")+1])
            if data.get("action") == "sale":
                save_sale(data["project"], data["unit"], data["price"], data["client"])
                await update.message.reply_text(f"تم تسجيل البيعة ✅\n{data['project']} - {data['unit']} - {data['price']} - {data['client']}")
@@ -189,6 +208,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
            project_data = get_project_data(p)
            detected_project = p
            break
+
+   if "وحدة" in user_message and detected_project:
+       system = f"""استخرج من الرسالة دي معلومات الوحدة وارجع JSON فقط:
+{{"action":"unit","project":"اسم المشروع","unit_name":"اسم الوحدة","meters":"المساحة بالمتر","price_per_meter":"سعر المتر"}}"""
+       response = client.messages.create(
+           model="claude-haiku-4-5-20251001",
+           max_tokens=200,
+           system=system,
+           messages=[{"role": "user", "content": user_message}]
+       )
+       reply = response.content[0].text.strip()
+       try:
+           data = json.loads(reply[reply.find("{"):reply.rfind("}")+1])
+           if data.get("action") == "unit":
+               write_unit_to_sheet(data["project"], data["unit_name"], data["meters"], data["price_per_meter"])
+               await update.message.reply_text(f"تم اضافة الوحدة ✅\n{data['unit_name']} - {data['meters']} متر - {data['price_per_meter']} للمتر")
+           return
+       except:
+           pass
 
    if "سكريبت" in user_message:
        user_context[user_id] = {"project": detected_project, "request": user_message}
@@ -225,13 +263,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
    if '"action"' in reply and '"save"' in reply:
        try:
-           start_idx = reply.find("{")
-           end_idx = reply.rfind("}") + 1
-           data = json.loads(reply[start_idx:end_idx])
+           data = json.loads(reply[reply.find("{"):reply.rfind("}")+1])
            if data.get("action") == "save":
                project = data.get("project")
-               fields = data.get("fields", [])
-               for f in fields:
+               for f in data.get("fields", []):
                    write_to_sheet(project, f["field"], f["value"])
                await update.message.reply_text(f"تم حفظ المعلومات في {project} ✅")
            return
