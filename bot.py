@@ -7,7 +7,8 @@ from telegram.ext import Application, MessageHandler, CommandHandler, CallbackQu
 
 SHEET_ID = "1x5CfKVrgXZy1-1yVPoqAwcS0KpxeOyzxfA8shDt2qkw"
 AV_SHEET_ID = "1f-1lkgr7nGiQofoREnhfbszjaJFu17OtZaMJ09_sLWw"
-PROJECTS = ["D11", "D12", "Metro Degla", "Medist", "Tigan", "Waterway 1", "Waterway 2", "Stage X"]
+PROJECTS = ["D11 BUSINESS", "D12 Medical", "Metro Degla", "Medist", "Tigan", "WW1", "WW2", "STAGE X", "RESALE", "MIDST", "TIJAN"]
+AV_PROJECTS = ["WW1", "WW2", "D11 BUSINESS", "D12 Medical", "TIJAN", "MIDST", "STAGE X", "RESALE"]
 SECRET_PASSWORD = os.environ.get("SECRET_PASSWORD", "Adel2026")
 
 COMPANY_INFO = """
@@ -22,54 +23,23 @@ COMPANY_INFO = """
 - م/ معاذ باشا
 - أ/ محمد خليل
 
-رسالة الشركة: البناء على الأرض من خلال منتجاتها العقارية والخدمية، وخلق بيئة خدمية واستثمارية جاذبة داخل جمهورية مصر العربية.
-
-رؤية الشركة: السعي نحو قمة مجالها والسيطرة على السوق في مصر من خلال تنويع مشاريعها واستهداف شرائح متميزة على المدى الطويل.
-
 المشاريع المنفذة:
-1. Degla One Mall - المشروع الأول (2019-2021) - مكتمل
-  - مساحة: 2326 م²
-  - 48 وحدة (25 تجاري + 11 إداري + 12 سكني)
-
-2. Sky Degla Mall - المشروع الثاني (2020-2023) - مكتمل
-  - مساحة: 4050 م²
-  - 233 وحدة (116 تجاري + 78 إداري + 39 طبي)
-  - أمام الموقف الإقليمي الجديد والداخلي للمدينة
-  - على طريق مصر النور تقاطع امتداد الأردنية
+1. Degla One Mall (2019-2021) - 48 وحدة (25 تجاري + 11 إداري + 12 سكني)
+2. Sky Degla Mall (2020-2023) - 233 وحدة (116 تجاري + 78 إداري + 39 طبي)
 
 المشاريع قيد التنفيذ:
-3. Metro Degla - المشروع الثالث (2022)
-  - مساحة: 14,707 م²
-  - 396 وحدة (231 تجاري + 87 إداري + 78 طبي)
-
-4. Stage X - المشروع الرابع (2022)
-  - مساحة: 11,969 م²
-  - 96 وحدة تجارية
-
-5. Midst Degla Mall - المشروع الخامس (2022)
-  - مساحة: 2,060 م²
-  - 99 وحدة (54 تجاري + 45 طبي)
-
-6. Tijan Mall - المشروع السادس (2024)
-  - مساحة: 2,700 م²
-  - 136 وحدة (76 تجاري + 20 إداري + 40 طبي)
-
-7. Metro Plus Mall - المشروع السابع (2024)
-  - مساحة: 1,800 م²
-  - 163 وحدة (91 تجاري + 48 إداري + 24 طبي)
-
-8. Waterway Degla Mall - المشروع الثامن (2025)
-  - مساحة: 10,000 م²
-  - 188 وحدة (95 تجاري + 54 إداري + 39 طبي)
+3. Metro Degla - 396 وحدة (231 تجاري + 87 إداري + 78 طبي)
+4. Stage X - 96 وحدة تجارية
+5. Midst Degla Mall - 99 وحدة (54 تجاري + 45 طبي)
+6. Tijan Mall - 136 وحدة (76 تجاري + 20 إداري + 40 طبي)
+7. Metro Plus Mall - 163 وحدة (91 تجاري + 48 إداري + 24 طبي)
+8. Waterway Degla Mall - 188 وحدة (95 تجاري + 54 إداري + 39 طبي)
 
 مزايا الشركة:
-- أول شركة تطوير عقاري تغير الطابع العمراني التقليدي لمدينة العاشر من رمضان
+- أول شركة تغير الطابع العمراني التقليدي للعاشر من رمضان
 - مواقع استراتيجية بحركة سكانية مرتفعة
-- التزام بالتسليم طبقاً للمواصفات والجدول الزمني المتفق عليه
+- التزام بالتسليم طبقاً للمواصفات
 - سمعة ممتازة داخل وخارج المدينة
-- توفر الواجهات المميزة للاستثمار
-
-خدمات الشركة: قانونية، IT، تشغيل، صيانة، تسويق، أحداث ترويجية، مبيعات، أمن، نظافة
 """
 
 creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
@@ -134,7 +104,7 @@ def get_project_details(project_filter):
    all_data = get_availability_data()
    available = [u for u in all_data if u["status"].lower() == "available" and (project_filter.lower() in u["sheet"].lower() or project_filter.lower() in u["project"].lower())]
    if not available:
-       return "لا توجد وحدات متاحة في هذا المشروع حالياً."
+       return f"لا توجد وحدات متاحة في {project_filter} حالياً."
    result = f"الوحدات المتاحة في {project_filter}:\n\n"
    for u in available:
        result += f"• {u['unit']} | {u['area']}م² | إجمالي {u['total']} جنيه | مقدم {u['down_payment']}\n"
@@ -357,7 +327,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
            pass
 
    if "تفاصيل" in user_message:
-       for p in ["WW1", "WW2", "D11", "D12", "TIJAN", "MIDST", "STAGE X"]:
+       for p in AV_PROJECTS:
            if p.lower() in user_message.lower():
                details = get_project_details(p)
                await update.message.reply_text(details)
@@ -366,10 +336,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
    keywords_av = ["متاح", "available", "فاضي", "كام وحدة", "وحدات متاحة", "ايه المتاح", "المتاح", "الاتاحه", "الإتاحة"]
    if any(k in user_message.lower() for k in keywords_av):
        project_filter = None
-       for p in ["WW1", "WW2", "D11", "D12", "TIJAN", "MIDST", "STAGE X"]:
+       for p in AV_PROJECTS:
            if p.lower() in user_message.lower():
                project_filter = p
                break
+       if not project_filter:
+           for alias, real in [("d12", "D12 Medical"), ("d11", "D11 BUSINESS"), ("waterway", "WW"), ("ww1", "WW1"), ("ww2", "WW2"), ("tijan", "TIJAN"), ("midst", "MIDST"), ("stage x", "STAGE X")]:
+               if alias in user_message.lower():
+                   project_filter = real
+                   break
        if project_filter:
            details = get_project_details(project_filter)
            await update.message.reply_text(details)
@@ -385,6 +360,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
            project_data = get_project_data(p)
            detected_project = p
            break
+   if not detected_project:
+       aliases = {"d12": "D12 Medical", "d11": "D11 BUSINESS", "waterway": "WW1", "ww1": "WW1", "ww2": "WW2", "tijan": "TIJAN", "midst": "MIDST", "stage x": "STAGE X"}
+       for alias, real in aliases.items():
+           if alias in user_message.lower():
+               detected_project = real
+               project_data = get_project_data(real)
+               break
 
    if "وحدة" in user_message and detected_project:
        system = """استخرج من الرسالة معلومات الوحدة وأرجع JSON فقط:
@@ -436,19 +418,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
    add_to_history(user_id, "user", user_message)
 
+   av_context = ""
+   if detected_project:
+       units = get_project_details(detected_project)
+       av_context = f"\nالوحدات المتاحة:\n{units}"
+
    system = f"""أنت مساعد فريق مبيعات شركة معمار دجلة للتطوير العقاري.
-تتحدث بأسلوب مصري راقٍ وطبيعي - لا عامية مبالغة ولا رسمية زائدة.
+تتحدث بأسلوب مصري راقٍ وطبيعي.
 اسم الشركة دائماً "معمار دجلة" فقط.
 
-معلومات الشركة الكاملة:
+معلومات الشركة:
 {COMPANY_INFO}
 
 المشاريع في النظام: {", ".join(PROJECTS)}
-{f"معلومات إضافية عن {detected_project}:{chr(10)}{project_data}" if project_data else ""}
+{f"معلومات {detected_project}:{chr(10)}{project_data}" if project_data else ""}
+{av_context}
 
 إذا أراد إضافة معلومة - أرجع JSON فقط:
 {{"action":"save","project":"اسم","fields":[{{"field":"حقل","value":"قيمة"}}]}}
-إذا سأل - أجب بشكل طبيعي ومختصر متذكراً سياق المحادثة."""
+إذا سأل - أجب بشكل طبيعي ومختصر متذكرا سياق المحادثة."""
 
    history = get_history(user_id)
 
