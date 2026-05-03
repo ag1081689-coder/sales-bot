@@ -2,8 +2,8 @@ import os
 import json
 import anthropic
 import gspread
-from telegram import Update
-from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, MessageHandler, CommandHandler, CallbackQueryHandler, filters, ContextTypes
 
 SHEET_ID = "1x5CfKVrgXZy1-1yVPoqAwcS0KpxeOyzxfA8shDt2qkw"
 PROJECTS = ["D11", "D12", "Metro Degla", "Medist", "Tigan", "Waterway 1", "Waterway 2", "Stage X"]
@@ -13,6 +13,8 @@ gc = gspread.service_account_from_dict(creds_json)
 sh = gc.open_by_key(SHEET_ID)
 
 client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+
+user_context = {}
 
 def write_to_sheet(project, field, value):
    try:
@@ -39,11 +41,88 @@ def get_project_data(project_name):
    except:
        return ""
 
+def get_style_buttons():
+   keyboard = [
+       [
+           InlineKeyboardButton("😣 Pain Point", callback_data="style_pain"),
+           InlineKeyboardButton("📊 المقارنة", callback_data="style_compare")
+       ],
+       [
+           InlineKeyboardButton("⏰ FOMO", callback_data="style_fomo"),
+           InlineKeyboardButton("💰 ROI والأرقام", callback_data="style_roi")
+       ],
+       [
+           InlineKeyboardButton("📖 القصة", callback_data="style_story"),
+           InlineKeyboardButton("⭐ Social Proof", callback_data="style_social")
+       ],
+       [
+           InlineKeyboardButton("💎 Exclusivity", callback_data="style_exclusive")
+       ]
+   ]
+   return InlineKeyboardMarkup(keyboard)
+
+STYLES = {
+   "style_pain": ("Pain Point", "ابدأ بمشكلة العميل وألمه، وريه إن المشروع ده هو الحل"),
+   "style_compare": ("المقارنة", "قارن بين الإيجار والشراء بالأرقام الحقيقية"),
+   "style_fomo": ("FOMO", "ضغط الوقت والندرة بأسلوب راقي"),
+   "style_roi": ("ROI والأرقام", "احسبله العائد والأرقام بشكل واضح"),
+   "style_story": ("القصة", "قصة عميل حقيقي نجح واستفاد"),
+   "style_social": ("Social Proof", "أرقام مبيعات وشهادات موثوقة"),
+   "style_exclusive": ("Exclusivity", "الحصرية والندرة وإن مش للكل")
+}
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
    await update.message.reply_text("اهلا يسطا! انا مساعد السيلز، اسألني عن اي مشروع او قولي اكتب اعلان او سكريبت واسم المشروع")
 
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+   query = update.callback_query
+   await query.answer()
+   
+   user_id = query.from_user.id
+   style_key = query.data
+   
+   if style_key not in STYLES:
+       return
+   
+   style_name, style_instruction = STYLES[style_key]
+   saved = user_context.get(user_id, {})
+   project = saved.get("project", "")
+   request = saved.get("request", "")
+   project_data = get_project_data(project) if project else ""
+   
+   system = f"""انت كونتنت كرييتور متخصص في العقارات المصرية.
+اكتب سكريبت واتساب احترافي وشيك بالعربية البسيطة الطبيعية.
+
+معلومات المشروع:
+{project_data}
+
+تفاصيل العميل: {request}
+
+الأسلوب المطلوب: {style_name} - {style_instruction}
+
+قواعد الكتابة:
+- Hook يخطف الانتباه في السطر الأول
+- جسم الرسالة فيه المعلومات بشكل طبيعي مش ممل
+- نهاية تخليه ياخد اكشن
+- الأسلوب شيك ومحترم يليق بالعقارات
+- مش طويل ومش قصير - مناسب لواتساب
+- بدون مبالغة أو كلام فاضي"""
+
+   response = client.messages.create(
+       model="claude-haiku-4-5-20251001",
+       max_tokens=800,
+       system=system,
+       messages=[{"role": "user", "content": f"اكتب سكريبت {style_name} لمشروع {project}"}]
+   )
+   
+   await query.edit_message_text(
+       f"*سكريبت {style_name} - {project}*\n\n{response.content[0].text}",
+       parse_mode="Markdown"
+   )
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
    user_message = update.message.text.strip()
+   user_id = update.message.from_user.id
 
    project_data = ""
    detected_project = ""
@@ -53,32 +132,46 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
            detected_project = p
            break
 
-   system = f"""انت خبير تسويق عقاري مصري محترف.
+   if "سكريبت" in user_message:
+       user_context[user_id] = {
+           "project": detected_project,
+           "request": user_message
+       }
+       await update.message.reply_text(
+           f"تمام! سكريبت {detected_project} - اختار الأسلوب:",
+           reply_markup=get_style_buttons()
+       )
+       return
 
-المشاريع المتاحة: {", ".join(PROJECTS)}
+   if "اعلان" in user_message or "إعلان" in user_message:
+       system = f"""انت كونتنت كرييتور متخصص في العقارات المصرية.
+اكتب 3 صيغ إعلانية مختلفة بالعامية المصرية الشيك.
+معلومات المشروع: {project_data}
+كل إعلان فيه hook يخطف، معلومات المشروع، وcall to action قوي.
+احترافي ويليق بالعقارات."""
 
+       response = client.messages.create(
+           model="claude-haiku-4-5-20251001",
+           max_tokens=1200,
+           system=system,
+           messages=[{"role": "user", "content": user_message}]
+       )
+       await update.message.reply_text(response.content[0].text)
+       return
+
+   if '"action"' in user_message and '"save"' in user_message:
+       pass
+
+   system = f"""انت سيلز عقاري مصري محترف بتكلم زميلك بالعامية المصرية.
+المشاريع: {", ".join(PROJECTS)}
 {f"معلومات {detected_project}:{chr(10)}{project_data}" if project_data else ""}
-
-مهامك:
-1. لو بيسأل عن مشروع - رد بالمعلومات بالعامية المصرية بشكل طبيعي ومحترف
-
-2. لو بيدي معلومة جديدة عن مشروع - رد بـ JSON فقط بدون اي كلام:
-{{"action":"save","project":"اسم المشروع","fields":[{{"field":"اسم الحقل","value":"القيمة"}}]}}
-
-3. لو كتب "اعلان" واسم مشروع - اعمله 3 صيغ اعلانية بالعامية المصرية الاحترافية باستخدام هذه الطرق:
-- Pain Point: ابدأ بمشكلة العميل
-- Social Proof: ارقام وشهادات حقيقية
-- FOMO + Urgency: ضغط الوقت بأسلوب راقي
-- ROI: احسبله العائد بالارقام
-- Exclusivity: الحصرية والندرة
-- Story: قصة عميل نجح
-- Compare: قارن بين الايجار والشراء
-
-4. لو كتب "سكريبت" واسم مشروع - اعمله رسالة واتساب احترافية بالعربية الفصحى البسيطة للعميل، راقية ومحترمة، فيها معلومات المشروع وسبب منطقي يخليه ياخد قرار دلوقتي، بدون مبالغة او ضغط مبالغ فيه، تليق بسوق العقارات المحترم"""
+لو بيدي معلومة جديدة - رد بـ JSON فقط:
+{{"action":"save","project":"اسم","fields":[{{"field":"حقل","value":"قيمة"}}]}}
+لو بيسأل - رد طبيعي بالعامية."""
 
    response = client.messages.create(
        model="claude-haiku-4-5-20251001",
-       max_tokens=1500,
+       max_tokens=800,
        system=system,
        messages=[{"role": "user", "content": user_message}]
    )
@@ -105,6 +198,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
    app = Application.builder().token(os.environ["TELEGRAM_TOKEN"]).build()
    app.add_handler(CommandHandler("start", start))
+   app.add_handler(CallbackQueryHandler(handle_callback))
    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
    app.run_polling(drop_pending_updates=True)
 
