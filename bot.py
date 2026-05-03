@@ -6,16 +6,72 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, MessageHandler, CommandHandler, CallbackQueryHandler, filters, ContextTypes
 
 SHEET_ID = "1x5CfKVrgXZy1-1yVPoqAwcS0KpxeOyzxfA8shDt2qkw"
+AV_SHEET_ID = "1f-1lkgr7nGiQofoREnhfbszjaJFu17OtZaMJ09_sLWw"
 PROJECTS = ["D11", "D12", "Metro Degla", "Medist", "Tigan", "Waterway 1", "Waterway 2", "Stage X"]
 SECRET_PASSWORD = os.environ.get("SECRET_PASSWORD", "Adel2026")
 
 creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
 gc = gspread.service_account_from_dict(creds_json)
 sh = gc.open_by_key(SHEET_ID)
+av_sh = gc.open_by_key(AV_SHEET_ID)
 
 client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
 user_context = {}
+
+def get_availability_data(query=""):
+   try:
+       all_data = []
+       for ws in av_sh.worksheets():
+           try:
+               data = ws.get_all_values()
+               if len(data) < 3:
+                   continue
+               headers = data[2]
+               for row in data[3:]:
+                   if len(row) >= 8 and row[2]:
+                       unit = {
+                           "sheet": ws.title,
+                           "unit": row[2] if len(row) > 2 else "",
+                           "area": row[3] if len(row) > 3 else "",
+                           "price": row[4] if len(row) > 4 else "",
+                           "total": row[5] if len(row) > 5 else "",
+                           "project": row[6] if len(row) > 6 else "",
+                           "status": row[7] if len(row) > 7 else "",
+                           "down_payment": row[8] if len(row) > 8 else "",
+                           "instalments": row[9] if len(row) > 9 else "",
+                           "cash_discount": row[10] if len(row) > 10 else ""
+                       }
+                       all_data.append(unit)
+           except:
+               continue
+       return all_data
+   except:
+       return []
+
+def search_units(query, status_filter=None, project_filter=None):
+   all_data = get_availability_data()
+   results = []
+   for unit in all_data:
+       if status_filter and unit["status"].lower() != status_filter.lower():
+           continue
+       if project_filter and project_filter.lower() not in unit["project"].lower() and project_filter.lower() not in unit["sheet"].lower():
+           continue
+       if query:
+           query_lower = query.lower()
+           if any(query_lower in str(v).lower() for v in unit.values()):
+               results.append(unit)
+       else:
+           results.append(unit)
+   return results[:20]
+
+def format_units(units):
+   if not units:
+       return "مفيش وحدات بالشروط دي"
+   result = ""
+   for u in units:
+       result += f"• {u['unit']} | {u['area']}م | {u['total']} جنيه | {u['status']} | مقدم {u['down_payment']}\n"
+   return result
 
 def get_or_create_sheet(project):
    try:
@@ -29,17 +85,12 @@ def write_unit_to_sheet(project, unit_name, meters, price_per_meter):
    try:
        ws = get_or_create_sheet(project)
        data = ws.get_all_values()
-       
-       # ابحث لو الوحدة موجودة وعدلها
        for i, row in enumerate(data):
            if len(row) >= 3 and row[2].strip() == unit_name.strip():
                ws.update_cell(i+1, 3, unit_name)
                ws.update_cell(i+1, 4, meters)
                ws.update_cell(i+1, 5, price_per_meter)
                return True
-       
-       # لو مش موجودة - حطها بعد الهيدر مباشرة (صف 2)
-       # حرك كل الصفوف نزل
        ws.insert_row(["", "", unit_name, meters, price_per_meter], 2)
        return True
    except:
@@ -70,7 +121,7 @@ def get_project_data(project_name):
            if len(row) >= 5 and row[2]:
                units.append(f"وحدة {row[2]}: {row[3]} متر - {row[4]} جنيه للمتر")
        if units:
-           result += "\nالوحدات المتاحة:\n" + "\n".join(units)
+           result += "\nالوحدات:\n" + "\n".join(units)
        return result
    except:
        return ""
@@ -206,6 +257,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
        except:
            pass
 
+   keywords_av = ["متاح", "available", "فاضي", "فيه وحدة", "كام وحدة", "وحدات متاحة", "ايه المتاح"]
+   if any(k in user_message.lower() for k in keywords_av):
+       project_filter = None
+       for p in ["WW1", "WW2", "D11", "D12", "TIJAN", "MIDST", "STAGE X"]:
+           if p.lower() in user_message.lower():
+               project_filter = p
+               break
+       units = search_units("", status_filter="available", project_filter=project_filter)
+       formatted = format_units(units)
+       await update.message.reply_text(f"الوحدات المتاحة:\n\n{formatted}")
+       return
+
    project_data = ""
    detected_project = ""
    for p in PROJECTS:
@@ -251,9 +314,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
        await update.message.reply_text(response.content[0].text)
        return
 
+   units_context = ""
+   for p in ["WW1", "WW2", "D11", "D12", "TIJAN", "MIDST", "STAGE X"]:
+       if p.lower() in user_message.lower():
+           units = search_units("", project_filter=p)
+           if units:
+               units_context = f"\nالوحدات في {p}:\n" + format_units(units)
+           break
+
    system = f"""انت سيلز عقاري مصري محترف بتكلم زميلك بالعامية المصرية.
 المشاريع: {", ".join(PROJECTS)}
 {f"معلومات {detected_project}:{chr(10)}{project_data}" if project_data else ""}
+{units_context}
 لو بيدي معلومة جديدة - رد بـ JSON فقط:
 {{"action":"save","project":"اسم","fields":[{{"field":"حقل","value":"قيمة"}}]}}
 لو بيسأل - رد طبيعي بالعامية."""
