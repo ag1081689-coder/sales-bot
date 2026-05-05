@@ -23,6 +23,26 @@ PROJECT_ALIASES = {
     "metro +": "METRO +", "metro plus": "METRO +",
 }
 
+COMPANY_CONTEXT = """
+شركة معمار دجلة للتطوير العقاري - موجودة في العاشر من رمضان بالكامل.
+جميع مشاريعها في العاشر من رمضان فقط - مفيش مشاريع في أي مكان تاني.
+جميع الوحدات إدارية أو تجارية أو طبية - لا توجد وحدات سكنية إطلاقاً.
+
+المشاريع المتاحة:
+- D11 BUSINESS: وحدات إدارية وتجارية
+- D12 Medical: وحدات طبية وتجارية
+- METRO +: وحدات إدارية وتجارية وطبية
+- TIJAN: وحدات تجارية وإدارية وطبية
+- WW1: وحدات تجارية (Waterway 1)
+- WW2: وحدات تجارية (Waterway 2)
+- STAGE X: وحدات تجارية
+- MIDST: وحدات تجارية وطبية
+- RESALE: وحدات للبيع الثاني
+
+للبحث عن وحدة: PROJECT - UNIT CODE (مثال: WW1 - W1 C3)
+للـ payment plan: payment plan PROJECT - UNIT مقدم X% على Y سنين
+"""
+
 creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
 gc = gspread.service_account_from_dict(creds_json)
 sh = gc.open_by_key(SHEET_ID)
@@ -95,11 +115,9 @@ def extract_area(text):
 def parse_project_unit(text):
     if "-" in text:
         parts = text.split("-", 1)
-        project_part = parts[0].strip()
-        unit_part = parts[1].strip()
-        detected = detect_project(project_part)
-        if detected and unit_part:
-            return detected, unit_part.upper()
+        detected = detect_project(parts[0].strip())
+        if detected and parts[1].strip():
+            return detected, parts[1].strip().upper()
     return None, None
 
 def get_unit_from_sheet(unit_code, project_filter=None):
@@ -197,55 +215,44 @@ def calculate_payment_plan(total_price_str, down_pct, years):
         total = float(re.sub(r'[^\d.]', '', total_price_str))
         down = total * (down_pct / 100)
         remaining = total - down
-        quarters = years * 4
-        quarterly = remaining / quarters if quarters > 0 else 0
-        monthly = remaining / (years * 12) if years > 0 else 0
-        return {
-            "total": total,
-            "down": down,
-            "remaining": remaining,
-            "quarterly": quarterly,
-            "monthly": monthly,
-            "years": years,
-            "down_pct": down_pct
-        }
+        quarterly = remaining / (years * 4)
+        monthly = remaining / (years * 12)
+        return {"total": total, "down": down, "remaining": remaining,
+                "quarterly": quarterly, "monthly": monthly, "years": years, "down_pct": down_pct}
     except:
         return None
 
 def format_payment_plan(unit, plan):
     text = f"💳 *Payment Plan - {unit['code']}*\n"
-    text += f"🏢 المشروع: {unit['sheet']}\n"
-    text += f"📐 المساحة: {unit['area']}م²\n\n"
+    text += f"🏢 {unit['sheet']} | 📐 {unit['area']}م²\n\n"
     text += f"💵 السعر الإجمالي: {plan['total']:,.0f} جنيه\n"
     text += f"🔑 المقدم {plan['down_pct']}%: {plan['down']:,.0f} جنيه\n"
     text += f"📊 المتبقي: {plan['remaining']:,.0f} جنيه\n\n"
     text += f"على {plan['years']} سنين:\n"
-    text += f"• قسط ربع سنوي: {plan['quarterly']:,.0f} جنيه\n"
-    text += f"• قسط شهري: {plan['monthly']:,.0f} جنيه\n"
+    text += f"• ربع سنوي: {plan['quarterly']:,.0f} جنيه\n"
+    text += f"• شهري: {plan['monthly']:,.0f} جنيه"
     return text
 
 def format_unit_details(unit):
     status_emoji = "✅" if unit["status"] == "available" else "🔴" if unit["status"] == "reserved" else "🔵"
+    bad_values = ["available", "reserved", "hold", ""]
     text = f"*{unit['code']}* - {unit['sheet']}\n\n"
-    if unit.get("area"):
-        text += f"📐 المساحة: {unit['area']}م²\n"
-    price = unit.get("price", "")
-    if price and price not in ["available", "reserved", "hold"]:
-        text += f"💰 سعر المتر: {price} جنيه\n"
-    if unit.get("total_after") and unit.get("total_after") not in ["available", "reserved", "hold"]:
+    if unit.get("area"): text += f"📐 المساحة: {unit['area']}م²\n"
+    if unit.get("price") and unit.get("price") not in bad_values:
+        text += f"💰 سعر المتر: {unit['price']} جنيه\n"
+    if unit.get("total_after") and unit.get("total_after") not in bad_values:
         text += f"✨ السعر بعد الخصم: {unit['total_after']} جنيه\n"
-    elif unit.get("total") and unit.get("total") not in ["available", "reserved", "hold"]:
+    elif unit.get("total") and unit.get("total") not in bad_values:
         text += f"💵 السعر: {unit['total']} جنيه\n"
-    if unit.get("downpayment") and unit.get("downpayment") not in ["available", "reserved", "hold"]:
+    if unit.get("downpayment") and unit.get("downpayment") not in bad_values:
         text += f"🔑 المقدم: {unit['downpayment']}\n"
-    if unit.get("installments") and unit.get("installments") not in ["available", "reserved", "hold"]:
+    if unit.get("installments") and unit.get("installments") not in bad_values:
         text += f"📅 الأقساط: {unit['installments']}\n"
     text += f"📊 الحالة: {status_emoji} {unit['status']}"
     return text
 
 def format_status(results):
-    if not results:
-        return "لا توجد بيانات."
+    if not results: return "لا توجد بيانات."
     text = ""
     for project, counts in results.items():
         total = sum(counts.values())
@@ -253,8 +260,7 @@ def format_status(results):
     return text
 
 def format_units(units, title=""):
-    if not units:
-        return "لا توجد وحدات بهذه المواصفات."
+    if not units: return "لا توجد وحدات بهذه المواصفات."
     result = f"*{title}*\n\n" if title else ""
     current_sheet = ""
     for u in units[:25]:
@@ -282,8 +288,7 @@ def get_sales_data():
     try:
         ws = sh.worksheet("المبيعات")
         data = ws.get_all_values()
-        if len(data) <= 1:
-            return "لا توجد مبيعات مسجلة حتى الآن."
+        if len(data) <= 1: return "لا توجد مبيعات مسجلة حتى الآن."
         return "\n".join([f"• {r[0]} - {r[1]} - {r[2]} - {r[3]} - {r[4]}" for r in data[1:] if len(r) >= 4])
     except:
         return "لا توجد مبيعات مسجلة."
@@ -347,13 +352,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     style_name, style_instruction = STYLES[style_key]
     saved = user_context.get(user_id, {})
     project = saved.get("project", "")
-    request = saved.get("request", "")
     project_info = get_project_info(project) if project else ""
+    request = saved.get("request", "")
 
     response = client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=800,
+        model="claude-haiku-4-5-20251001", max_tokens=800,
         system=f"""أنت خبير تسويق عقاري في معمار دجلة.
+{COMPANY_CONTEXT}
 معلومات المشروع: {project_info}
 تفاصيل: {request}
 الأسلوب: {style_name} - {style_instruction}
@@ -415,20 +420,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 years = int(years_match.group(1)) if years_match else 5
                 plan = calculate_payment_plan(total_str, down_pct, years)
                 if plan:
-                    text = format_payment_plan(unit, plan)
-                    await update.message.reply_text(text, parse_mode="Markdown")
+                    await update.message.reply_text(format_payment_plan(unit, plan), parse_mode="Markdown")
                     return
 
-        # لو مفيش كود محدد اسأل Claude يحسب
-        response = client.messages.create(
-            model="claude-haiku-4-5-20251001", max_tokens=600,
-            system="أنت مساعد مبيعات عقاري في معمار دجلة. احسب خطة السداد بالأرقام بشكل واضح ومنظم.",
-            messages=[{"role": "user", "content": user_message}]
-        )
-        await update.message.reply_text(response.content[0].text)
-        return
-
-    # البحث عن وحدة
+    # البحث عن وحدة بالكود
     detected_project, unit_code = parse_project_unit(user_message)
     if detected_project and unit_code:
         unit = get_unit_from_sheet(unit_code, detected_project)
@@ -446,8 +441,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keywords_available = ["متاح", "available", "فاضي"]
 
     if any(k in msg_lower for k in keywords_all) and not detected_project:
-        text = format_status(get_project_status())
-        await update.message.reply_text(f"📊 *ملخص جميع المشاريع*\n\n{text}", parse_mode="Markdown")
+        await update.message.reply_text(f"📊 *ملخص جميع المشاريع*\n\n{format_status(get_project_status())}", parse_mode="Markdown")
         return
 
     if any(k in msg_lower for k in keywords_status):
@@ -471,7 +465,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         project_info = get_project_info(detected_project) if detected_project else ""
         response = client.messages.create(
             model="claude-haiku-4-5-20251001", max_tokens=1200,
-            system=f"أنت خبير تسويق عقاري في معمار دجلة.\nمعلومات المشروع: {project_info}\nاكتب 3 صيغ إعلانية بأسلوب مصري راقٍ.",
+            system=f"أنت خبير تسويق عقاري في معمار دجلة.\n{COMPANY_CONTEXT}\nمعلومات المشروع: {project_info}\nاكتب 3 صيغ إعلانية بأسلوب مصري راقٍ.",
             messages=[{"role": "user", "content": user_message}]
         )
         await update.message.reply_text(response.content[0].text)
@@ -484,21 +478,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if detected_project or area_filter:
         units = get_all_units(project_filter=detected_project, status_filter="available", area_filter=area_filter)
         if units:
-            units_context = f"\nالوحدات المتاحة:\n" + "\n".join([f"• {u['code']} | {u['area']}م² | {u['total']}" for u in units[:10]])
+            units_context = "\nالوحدات المتاحة:\n" + "\n".join([f"• {u['code']} | {u['area']}م² | {u['total']}" for u in units[:10]])
 
-    system = f"""أنت مساعد مبيعات ذكي في شركة معمار دجلة.
-تتحدث بأسلوب مصري راقٍ وطبيعي - مش روبوت، بتتناقش وبتساعد.
-جميع الوحدات إدارية أو تجارية أو طبية - لا توجد سكنية.
-المشاريع: {", ".join(PROJECTS)}
+    system = f"""أنت مساعد مبيعات ذكي ومحترف في شركة معمار دجلة.
+{COMPANY_CONTEXT}
 {units_context}
-للبحث عن وحدة: PROJECT - UNIT CODE (مثال: WW1 - W1 C3)
-للـ payment plan: payment plan PROJECT - UNIT مقدم X% على Y سنين
-ساعد السيلز يلاقي الوحدة المناسبة واسأل عن احتياجات العميل."""
+تتحدث بأسلوب مصري راقٍ وطبيعي - بتتناقش وبتساعد السيلز فعلاً.
+لو السيلز قالك عن احتياج العميل - اقترحله مشروع مناسب من المشاريع الموجودة فعلاً.
+لو العميل عايز وحدة إدارية - اقترح D11 BUSINESS أو METRO +.
+لو ميزانية محدودة - اقترح أرخص المشاريع.
+أجب بشكل مختصر وعملي."""
 
     history = get_history(user_id)
     response = client.messages.create(
         model="claude-haiku-4-5-20251001",
-        max_tokens=600,
+        max_tokens=500,
         system=system,
         messages=history
     )
