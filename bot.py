@@ -6,7 +6,6 @@ import gspread
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, MessageHandler, CommandHandler, CallbackQueryHandler, filters, ContextTypes
 
-# ── Constants ─────────────────────────────────────────────
 SHEET_ID = "1x5CfKVrgXZy1-1yVPoqAwcS0KpxeOyzxfA8shDt2qkw"
 AV_SHEET_ID = "1f-1lkgr7nGiQofoREnhfbszjaJFu17OtZaMJ09_sLWw"
 SECRET_PASSWORD = os.environ.get("SECRET_PASSWORD", "Adel2026")
@@ -20,7 +19,6 @@ PROJECT_ALIASES = {
     "resale": "RESALE", "metro": "METRO +",
 }
 
-# ── System Prompt (حطه هنا - ده اللي بيوفر التوكنز) ──────
 SYSTEM_PROMPT = """أنت مساعد مبيعات في شركة معمار دجلة للتطوير العقاري.
 
 الشركة:
@@ -39,7 +37,6 @@ SYSTEM_PROMPT = """أنت مساعد مبيعات في شركة معمار دج�
 للـ payment plan: payment plan WW1 - W1 C3 مقدم 20% على 5 سنين
 لما تخلص من وحدة: تمام"""
 
-# ── Setup ─────────────────────────────────────────────────
 creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
 gc = gspread.service_account_from_dict(creds_json)
 sh = gc.open_by_key(SHEET_ID)
@@ -51,7 +48,6 @@ chat_history = {}
 current_unit = {}
 headers_cache = {}
 
-# ── Helpers ───────────────────────────────────────────────
 def clean(s):
     try: return float(re.sub(r'[^\d.]', '', str(s)))
     except: return 0
@@ -108,8 +104,10 @@ def row_to_unit(row, ws_title, h):
     bad = ["available","reserved","hold",""]
     total = gcell(row,h,"total_after") or gcell(row,h,"total")
     down = gcell(row,h,"down")
+    project = gcell(row,h,"project") if "project" in h else ws_title
     return {
         "sheet": ws_title,
+        "project": project if project not in bad else ws_title,
         "code": gcell(row,h,"code"),
         "area": gcell(row,h,"area"),
         "price": gcell(row,h,"price") if gcell(row,h,"price") not in bad else "",
@@ -121,7 +119,6 @@ def row_to_unit(row, ws_title, h):
         "status": get_status(row,h)
     }
 
-# ── Sheet Queries ─────────────────────────────────────────
 def find_unit(code, project=None):
     code = code.strip().upper().replace(" ","")
     for ws in av_sh.worksheets():
@@ -182,10 +179,9 @@ def get_sales():
         return "\n".join([f"• {r[0]}-{r[1]}-{r[2]}-{r[3]}-{r[4]}" for r in data[1:] if len(r)>=4])
     except: return "لا توجد مبيعات."
 
-# ── Formatters ────────────────────────────────────────────
 def fmt_unit(u):
     e = "✅" if u["status"]=="available" else "🔴" if u["status"]=="reserved" else "🔵"
-    t = f"*{u['code']}* - {u['sheet']}\n"
+    t = f"*{u['code']}* - {u.get('project') or u['sheet']}\n"
     if u.get("area"): t += f"📐 {u['area']}م²\n"
     if u.get("price"): t += f"💰 سعر المتر: {u['price']} جنيه\n"
     if u.get("total"): t += f"💵 الإجمالي: {u['total']} جنيه\n"
@@ -200,7 +196,7 @@ def fmt_stats(res):
 
 def fmt_plan(u, plan):
     return (f"💳 *Payment Plan - {u['code']}*\n"
-            f"🏢 {u['sheet']} | 📐 {u.get('area','')}م²\n\n"
+            f"🏢 {u.get('project') or u['sheet']} | 📐 {u.get('area','')}م²\n\n"
             f"💵 السعر: {plan['total']:,.0f} جنيه\n"
             f"🔑 المقدم {plan['dp']}%: {plan['down']:,.0f} جنيه\n"
             f"📊 المتبقي: {plan['rem']:,.0f} جنيه\n\n"
@@ -251,7 +247,6 @@ def ai(messages, system=None, max_tokens=400):
         messages=messages
     ).content[0].text.strip()
 
-# ── Handlers ──────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.message.from_user.id
     chat_history[uid] = []
@@ -285,7 +280,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.message.from_user.id
     ml = msg.lower()
 
-    # Password
     if user_context.get(uid, {}).get("waiting_password"):
         if msg == SECRET_PASSWORD:
             user_context[uid] = {"authenticated": True}
@@ -302,7 +296,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("أدخل كلمة المرور:")
         return
 
-    # تسجيل بيعة
     if "بيعة" in ml or "بعنا" in ml or "اتباع" in ml:
         try:
             t = ai([{"role":"user","content":msg}],
@@ -316,13 +309,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         except: pass
 
-    # تمام
     if ml.strip() in ["تمام","ok","okay","تم","موافق","next"]:
         current_unit.pop(uid, None)
         await update.message.reply_text("تمام! في وحدة أو عميل تاني؟")
         return
 
-    # سكريبت
     if "سكريبت" in ml:
         p, uc = parse_pu(msg)
         if p and uc:
@@ -335,7 +326,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("ابعت الوحدة الأول، مثال: WW1 - W1 C3")
         return
 
-    # إعلان
     if "اعلان" in ml or "إعلان" in ml:
         u = current_unit.get(uid)
         unit_data = f"\nبيانات الوحدة:\n{fmt_unit(u)}" if u else ""
@@ -345,7 +335,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(reply)
         return
 
-    # Payment Plan
     if "payment plan" in ml or "بلان" in ml or "خطة سداد" in ml:
         p, uc = parse_pu(msg)
         u = find_unit(uc, p) if p and uc else current_unit.get(uid)
@@ -362,7 +351,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("ابعت الوحدة، مثال: payment plan WW1 - W1 C3 مقدم 20% على 5 سنين")
         return
 
-    # بحث بالكود
     p, uc = parse_pu(msg)
     if p and uc:
         u = find_unit(uc, p)
@@ -375,7 +363,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"مش لاقي {uc} في {p}")
         return
 
-    # بحث بالميزانية
     if any(k in ml for k in ["مقدم","ميزانية","إجمالي","اجمالي","مليون","ألف","الف"]) and any(c.isdigit() for c in msg):
         try:
             t = ai([{"role":"user","content":msg}],
@@ -387,10 +374,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 exact, close = search_budget(tmin, tmax, d.get("down_min"), d.get("down_max"))
                 add_h(uid,"user",msg)
                 if exact:
-                    out = f"✅ *{len(exact)} وحدة في النطاق:*\n\n" + "\n\n---\n\n".join([fmt_unit(u) for u in exact[:5]])
+                    out = f"✅ *{len(exact)} وحدة في النطاق:*\n\n" + "\n\n---\n\n".join([fmt_unit(u) for u in exact[:15]])
                     add_h(uid,"assistant",f"وجدت {len(exact)} وحدة")
                 elif close:
-                    out = f"مفيش بالظبط، بس في {len(close)} قريبة (±20%):\n\n" + "\n\n---\n\n".join([fmt_unit(u) for u in close[:5]])
+                    out = f"مفيش بالظبط، بس في {len(close)} قريبة (±20%):\n\n" + "\n\n---\n\n".join([fmt_unit(u) for u in close[:15]])
                     add_h(uid,"assistant",f"وجدت {len(close)} قريبة")
                 else:
                     out = "مفيش وحدات في النطاق ده. جرب توسع النطاق."
@@ -398,13 +385,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
         except: pass
 
-    # إحصائيات
     dp = detect_project(msg)
     if any(k in ml for k in ["كام وحدة","كل المشاريع","جميع","إتاحة","اتاحه","احصائيه"]):
         await update.message.reply_text(fmt_stats(project_stats(dp)), parse_mode="Markdown")
         return
 
-    # محادثة ذكية
     add_h(uid,"user",msg)
     u = current_unit.get(uid)
     unit_ctx = f"\nالوحدة الحالية:\n{fmt_unit(u)}\nتكلم بس عن البيانات دي." if u else ""
