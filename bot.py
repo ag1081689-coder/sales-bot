@@ -104,10 +104,8 @@ def row_to_unit(row, ws_title, h):
     bad = ["available","reserved","hold",""]
     total = gcell(row,h,"total_after") or gcell(row,h,"total")
     down = gcell(row,h,"down")
-    project = gcell(row,h,"project") if "project" in h else ws_title
     return {
         "sheet": ws_title,
-        "project": project if project not in bad else ws_title,
         "code": gcell(row,h,"code"),
         "area": gcell(row,h,"area"),
         "price": gcell(row,h,"price") if gcell(row,h,"price") not in bad else "",
@@ -181,7 +179,7 @@ def get_sales():
 
 def fmt_unit(u):
     e = "✅" if u["status"]=="available" else "🔴" if u["status"]=="reserved" else "🔵"
-    t = f"*{u['code']}* - {u.get('project') or u['sheet']}\n"
+    t = f"*{u['code']}* - {u['sheet']}\n"
     if u.get("area"): t += f"📐 {u['area']}م²\n"
     if u.get("price"): t += f"💰 سعر المتر: {u['price']} جنيه\n"
     if u.get("total"): t += f"💵 الإجمالي: {u['total']} جنيه\n"
@@ -196,7 +194,7 @@ def fmt_stats(res):
 
 def fmt_plan(u, plan):
     return (f"💳 *Payment Plan - {u['code']}*\n"
-            f"🏢 {u.get('project') or u['sheet']} | 📐 {u.get('area','')}م²\n\n"
+            f"🏢 {u['sheet']} | 📐 {u.get('area','')}م²\n\n"
             f"💵 السعر: {plan['total']:,.0f} جنيه\n"
             f"🔑 المقدم {plan['dp']}%: {plan['down']:,.0f} جنيه\n"
             f"📊 المتبقي: {plan['rem']:,.0f} جنيه\n\n"
@@ -374,8 +372,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 exact, close = search_budget(tmin, tmax, d.get("down_min"), d.get("down_max"))
                 add_h(uid,"user",msg)
                 if exact:
-out = f"✅ *{len(exact)} وحدة في النطاق:*\n\n" + "\n\n---\n\n".join([fmt_unit(u) for u in exact[:15]])
-
+                    out = f"✅ *{len(exact)} وحدة في النطاق:*\n\n" + "\n\n---\n\n".join([fmt_unit(u) for u in exact[:15]])
                     add_h(uid,"assistant",f"وجدت {len(exact)} وحدة")
                 elif close:
                     out = f"مفيش بالظبط، بس في {len(close)} قريبة (±20%):\n\n" + "\n\n---\n\n".join([fmt_unit(u) for u in close[:15]])
