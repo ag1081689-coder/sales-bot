@@ -31,15 +31,6 @@ PROJECT_ALIASES = {
     "metro plus": "METRO +",
 }
 
-COMPANY_INFO = """
-معمار دجلة للتطوير العقاري - MEMAAR DEGLA DEVELOPMENT
-تأسست: 2019 في العاشر من رمضان
-فريق: أكثر من 65 متخصص - تمويل ذاتي بالكامل
-الموقع: memaardegla.com | 15409
-المؤسسون: أ/ أحمد عبد العزيز | م/ معاذ باشا | أ/ محمد خليل
-ملاحظة: جميع الوحدات إدارية أو تجارية أو طبية - لا توجد وحدات سكنية.
-"""
-
 creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
 gc = gspread.service_account_from_dict(creds_json)
 sh = gc.open_by_key(SHEET_ID)
@@ -61,7 +52,7 @@ def detect_project(text):
     return None
 
 def extract_area(text):
-    patterns = [r'(\d+)\s*متر', r'(\d+)\s*م²', r'(\d+)\s*م ', r'مساحت[هة]\s*(\d+)']
+    patterns = [r'(\d+)\s*متر', r'(\d+)\s*م²', r'مساحت[هة]\s*(\d+)']
     for pattern in patterns:
         match = re.search(pattern, text)
         if match:
@@ -69,17 +60,38 @@ def extract_area(text):
     return None
 
 def detect_unit_code(text):
-    # يدور على كود زي D11 B01 أو WW1 C3
-    pattern = r'\b([A-Za-z0-9]+\s+[A-Za-z0-9]+)\b'
-    matches = re.findall(pattern, text.upper())
-    for m in matches:
-        parts = m.strip().split()
-        if len(parts) == 2 and any(c.isdigit() for c in parts[1]):
-            return m.strip()
+    # يدور على كود زي D11 B07 أو WW1 C3 أو 8 B 2
+    text_upper = text.upper().strip()
+    
+    # Pattern 1: مثل D11 B07 أو D11 C01
+    pattern1 = r'\b([A-Z]{1,4}\d{1,2}\s+[A-Z]{1,2}\d{1,3})\b'
+    match = re.search(pattern1, text_upper)
+    if match:
+        return match.group(1).strip()
+    
+    # Pattern 2: مثل W1 C3 أو W2 C8
+    pattern2 = r'\b([A-Z]\d{1,2}\s+[A-Z]\d{1,3})\b'
+    match = re.search(pattern2, text_upper)
+    if match:
+        return match.group(1).strip()
+    
+    # Pattern 3: مثل 8 B 2 أو 14 B 2
+    pattern3 = r'\b(\d{1,2}\s+[A-Z]\s+\d{1,2})\b'
+    match = re.search(pattern3, text_upper)
+    if match:
+        return match.group(1).strip()
+
+    # Pattern 4: مثل B18 أو E2 أو E9
+    pattern4 = r'\b([A-Z]\d{1,3})\b'
+    match = re.search(pattern4, text_upper)
+    if match:
+        return match.group(1).strip()
+
     return None
 
 def get_unit_from_sheet(unit_code, project_filter=None):
     try:
+        search_code = unit_code.strip().upper().replace(" ", "")
         for ws in av_sh.worksheets():
             if project_filter and project_filter.lower() not in ws.title.lower():
                 continue
@@ -90,12 +102,10 @@ def get_unit_from_sheet(unit_code, project_filter=None):
                 if not row or not row[0].strip():
                     continue
                 code_in_sheet = row[0].strip().upper().replace(" ", "")
-                code_search = unit_code.strip().upper().replace(" ", "")
-                if code_in_sheet == code_search:
-                    # الأعمدة: A=code, C=area, D=price/m, E=discount, F=total, G=total after discount, H=down, I=batch, K=installments, L=delivery, M=status
+                if code_in_sheet == search_code:
                     return {
                         "sheet": ws.title,
-                        "code": row[0] if len(row) > 0 else "",
+                        "code": row[0],
                         "area": row[2] if len(row) > 2 else "",
                         "price_per_meter": row[3] if len(row) > 3 else "",
                         "discount": row[4] if len(row) > 4 else "",
@@ -141,7 +151,7 @@ def get_all_units(project_filter=None, status_filter=None, area_filter=None):
                 if not row or not row[0].strip() or len(row) < 13:
                     continue
                 row_status = row[12].strip().lower()
-                if not row_status:
+                if not row_status or row_status not in ["available", "reserved", "hold"]:
                     continue
                 if status_filter and row_status != status_filter.lower():
                     continue
@@ -187,7 +197,7 @@ def format_units(units, title=""):
             current_sheet = u["sheet"]
             result += f"*{current_sheet}:*\n"
         status_emoji = "✅" if u["status"] == "available" else "🔴" if u["status"] == "reserved" else "🔵"
-        result += f"• {u['code']} | {u['area']}م² | {u['total_after_discount']} جنيه | {status_emoji}\n"
+        result += f"• {u['code']} | {u['area']}م² | {u['total_after_discount']} | {status_emoji}\n"
     return result
 
 def save_sale(project, unit, price, client_name):
@@ -274,13 +284,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     chat_history[user_id] = []
     await update.message.reply_text(
-        "مرحباً بك في معمار دجلة!\n\n"
-        "يمكنني مساعدتك في:\n"
-        "• تفاصيل وحدة بكودها (مثال: D11 B07)\n"
+        "مرحباً! يمكنني مساعدتك في:\n"
+        "• تفاصيل وحدة (مثال: D11 B07)\n"
         "• الوحدات المتاحة والمحجوزة\n"
-        "• إعلانات وسكريبتات احترافية\n"
-        "• تسجيل المبيعات\n\n"
-        "كيف يمكنني مساعدتك؟"
+        "• إعلانات وسكريبتات\n"
+        "• تسجيل المبيعات"
     )
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -297,7 +305,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     project_info = get_project_info(project) if project else ""
 
     system = f"""أنت خبير تسويق عقاري في شركة معمار دجلة.
-{COMPANY_INFO}
 معلومات المشروع: {project_info}
 تفاصيل العميل: {request}
 الأسلوب: {style_name} - {style_instruction}
@@ -366,18 +373,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     area_filter = extract_area(user_message)
     unit_code = detect_unit_code(user_message)
 
-    # البحث عن وحدة بكودها
     if unit_code:
         unit = get_unit_from_sheet(unit_code, detected_project)
         if unit:
             status_emoji = "✅" if unit["status"] == "available" else "🔴" if unit["status"] == "reserved" else "🔵"
-            text = f"*تفاصيل الوحدة {unit['code']}*\n\n"
-            text += f"🏢 المشروع: {unit['sheet']}\n"
+            text = f"*{unit['code']}* - {unit['sheet']}\n\n"
             text += f"📐 المساحة: {unit['area']}م²\n"
             text += f"💰 سعر المتر: {unit['price_per_meter']} جنيه\n"
             text += f"🏷️ الخصم: {unit['discount']} جنيه\n"
             text += f"💵 السعر الأصلي: {unit['total_price']}\n"
-            text += f"✨ السعر بعد الخصم: {unit['total_after_discount']} جنيه\n"
+            text += f"✨ بعد الخصم: {unit['total_after_discount']} جنيه\n"
             text += f"🔑 المقدم: {unit['downpayment']} جنيه\n"
             text += f"📅 القسط السنوي: {unit['batch_after_year']} جنيه\n"
             text += f"💳 قيمة الأقساط: {unit['installments']} جنيه\n"
@@ -434,7 +439,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if "اعلان" in msg_lower or "إعلان" in msg_lower:
         system = f"""أنت خبير تسويق عقاري في معمار دجلة.
-{COMPANY_INFO}
 معلومات المشروع: {project_info}
 اكتب 3 صيغ إعلانية بأسلوب مصري راقٍ.
 لا تذكر أي اسم غير معمار دجلة."""
@@ -450,17 +454,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     add_to_history(user_id, "user", user_message)
 
     system = f"""أنت مساعد فريق مبيعات شركة معمار دجلة.
-تتحدث بأسلوب مصري راقٍ وطبيعي. اسم الشركة دائماً "معمار دجلة" فقط.
-جميع الوحدات إدارية أو تجارية أو طبية - لا توجد وحدات سكنية.
-{COMPANY_INFO}
+تتحدث بأسلوب مصري راقٍ وطبيعي ومختصر.
+اسم الشركة دائماً "معمار دجلة" فقط.
+جميع الوحدات إدارية أو تجارية أو طبية.
 المشاريع: {", ".join(PROJECTS)}
 {f"معلومات {detected_project}:{chr(10)}{project_info}" if project_info else ""}
-إذا سأل - أجب بشكل طبيعي ومختصر."""
+أجب بشكل طبيعي ومختصر بدون ذكر معلومات الشركة العامة."""
 
     history = get_history(user_id)
     response = client.messages.create(
         model="claude-haiku-4-5-20251001",
-        max_tokens=800,
+        max_tokens=500,
         system=system,
         messages=history
     )
