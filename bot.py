@@ -374,7 +374,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 exact, close = search_budget(tmin, tmax, d.get("down_min"), d.get("down_max"))
                 add_h(uid,"user",msg)
                 if exact:
-                    out = f"✅ *{len(exact)} وحدة في النطاق:*\n\n" + "\n\n---\n\n".join([fmt_unit(u) for u in exact[:15]])
+out = f"✅ *{len(exact)} وحدة في النطاق:*\n\n" + "\n\n---\n\n".join([fmt_unit(u) for u in exact[:15]])
+
                     add_h(uid,"assistant",f"وجدت {len(exact)} وحدة")
                 elif close:
                     out = f"مفيش بالظبط، بس في {len(close)} قريبة (±20%):\n\n" + "\n\n---\n\n".join([fmt_unit(u) for u in close[:15]])
