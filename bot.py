@@ -41,6 +41,57 @@ client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 user_context = {}
 chat_history = {}
 
+# Cache للـ headers
+sheet_headers_cache = {}
+
+def get_sheet_headers(ws):
+    if ws.title in sheet_headers_cache:
+        return sheet_headers_cache[ws.title]
+    data = ws.get_all_values()
+    if not data:
+        return {}
+    headers = {}
+    for row in data[:3]:
+        for i, cell in enumerate(row):
+            cell_lower = cell.strip().lower().replace(" ", "").replace("_", "")
+            if cell_lower in ["code", "u.", "unit"]:
+                headers["code"] = i
+            elif cell_lower in ["area"]:
+                headers["area"] = i
+            elif cell_lower in ["price", "pricepermeter", "pricepermt"]:
+                headers["price"] = i
+            elif cell_lower in ["status"]:
+                headers["status"] = i
+            elif cell_lower in ["total", "totalprice", "totalpriceafterdicount", "totalpriceafterdiscount"]:
+                if "total_after" not in headers:
+                    headers["total"] = i
+                headers["total_after"] = i
+            elif cell_lower in ["downpayment", "down", "downpay"]:
+                headers["downpayment"] = i
+            elif cell_lower in ["instalments", "installments", "batchafteryear"]:
+                headers["installments"] = i
+            elif cell_lower in ["cashdiscount", "discount"]:
+                headers["discount"] = i
+            elif cell_lower in ["deliverypayment", "delivery"]:
+                headers["delivery"] = i
+    sheet_headers_cache[ws.title] = headers
+    return headers
+
+def get_cell(row, headers, key, default=""):
+    idx = headers.get(key)
+    if idx is not None and idx < len(row):
+        return row[idx].strip()
+    return default
+
+def get_status_from_row(row, headers):
+    status_idx = headers.get("status")
+    if status_idx is not None and status_idx < len(row):
+        return row[status_idx].strip().lower()
+    for cell in row:
+        if cell.strip().lower() in ["available", "reserved", "hold"]:
+            return cell.strip().lower()
+    return ""
+
 def detect_project(text):
     text_lower = text.lower().strip()
     for alias, real in PROJECT_ALIASES.items():
@@ -60,33 +111,23 @@ def extract_area(text):
     return None
 
 def detect_unit_code(text):
-    # يدور على كود زي D11 B07 أو WW1 C3 أو 8 B 2
     text_upper = text.upper().strip()
-    
-    # Pattern 1: مثل D11 B07 أو D11 C01
     pattern1 = r'\b([A-Z]{1,4}\d{1,2}\s+[A-Z]{1,2}\d{1,3})\b'
     match = re.search(pattern1, text_upper)
     if match:
         return match.group(1).strip()
-    
-    # Pattern 2: مثل W1 C3 أو W2 C8
     pattern2 = r'\b([A-Z]\d{1,2}\s+[A-Z]\d{1,3})\b'
     match = re.search(pattern2, text_upper)
     if match:
         return match.group(1).strip()
-    
-    # Pattern 3: مثل 8 B 2 أو 14 B 2
     pattern3 = r'\b(\d{1,2}\s+[A-Z]\s+\d{1,2})\b'
     match = re.search(pattern3, text_upper)
     if match:
         return match.group(1).strip()
-
-    # Pattern 4: مثل B18 أو E2 أو E9
     pattern4 = r'\b([A-Z]\d{1,3})\b'
     match = re.search(pattern4, text_upper)
     if match:
         return match.group(1).strip()
-
     return None
 
 def get_unit_from_sheet(unit_code, project_filter=None):
@@ -98,27 +139,28 @@ def get_unit_from_sheet(unit_code, project_filter=None):
             data = ws.get_all_values()
             if not data:
                 continue
+            headers = get_sheet_headers(ws)
+            code_idx = headers.get("code", 0)
             for row in data[1:]:
-                if not row or not row[0].strip():
+                if not row or not row[code_idx].strip():
                     continue
-                code_in_sheet = row[0].strip().upper().replace(" ", "")
+                code_in_sheet = row[code_idx].strip().upper().replace(" ", "")
                 if code_in_sheet == search_code:
                     return {
                         "sheet": ws.title,
-                        "code": row[0],
-                        "area": row[2] if len(row) > 2 else "",
-                        "price_per_meter": row[3] if len(row) > 3 else "",
-                        "discount": row[4] if len(row) > 4 else "",
-                        "total_price": row[5] if len(row) > 5 else "",
-                        "total_after_discount": row[6] if len(row) > 6 else "",
-                        "downpayment": row[7] if len(row) > 7 else "",
-                        "batch_after_year": row[8] if len(row) > 8 else "",
-                        "installments": row[10] if len(row) > 10 else "",
-                        "delivery_payment": row[11] if len(row) > 11 else "",
-                        "status": row[12] if len(row) > 12 else ""
+                        "code": get_cell(row, headers, "code"),
+                        "area": get_cell(row, headers, "area"),
+                        "price": get_cell(row, headers, "price"),
+                        "discount": get_cell(row, headers, "discount"),
+                        "total": get_cell(row, headers, "total"),
+                        "total_after": get_cell(row, headers, "total_after"),
+                        "downpayment": get_cell(row, headers, "downpayment"),
+                        "installments": get_cell(row, headers, "installments"),
+                        "delivery": get_cell(row, headers, "delivery"),
+                        "status": get_status_from_row(row, headers)
                     }
         return None
-    except:
+    except Exception as e:
         return None
 
 def get_project_status(project_filter=None):
@@ -128,12 +170,14 @@ def get_project_status(project_filter=None):
             if project_filter and project_filter.lower() not in ws.title.lower():
                 continue
             data = ws.get_all_values()
+            headers = get_sheet_headers(ws)
             counts = {"available": 0, "reserved": 0, "hold": 0}
             for row in data[1:]:
-                if len(row) > 12:
-                    s = row[12].strip().lower()
-                    if s in counts:
-                        counts[s] += 1
+                if not row or not row[0].strip():
+                    continue
+                s = get_status_from_row(row, headers)
+                if s in counts:
+                    counts[s] += 1
             if sum(counts.values()) > 0:
                 results[ws.title] = counts
         return results
@@ -147,32 +191,58 @@ def get_all_units(project_filter=None, status_filter=None, area_filter=None):
             if project_filter and project_filter.lower() not in ws.title.lower():
                 continue
             data = ws.get_all_values()
+            headers = get_sheet_headers(ws)
+            code_idx = headers.get("code", 0)
             for row in data[1:]:
-                if not row or not row[0].strip() or len(row) < 13:
+                if not row or not row[code_idx].strip():
                     continue
-                row_status = row[12].strip().lower()
+                row_status = get_status_from_row(row, headers)
                 if not row_status or row_status not in ["available", "reserved", "hold"]:
                     continue
                 if status_filter and row_status != status_filter.lower():
                     continue
+                area = get_cell(row, headers, "area")
                 if area_filter:
                     try:
-                        area_val = float(str(row[2]).replace(",", "").strip())
+                        area_val = float(area.replace(",", "").strip())
                         if abs(area_val - area_filter) > 2:
                             continue
                     except:
                         continue
+                total = get_cell(row, headers, "total_after") or get_cell(row, headers, "total")
                 all_units.append({
                     "sheet": ws.title,
-                    "code": row[0],
-                    "area": row[2] if len(row) > 2 else "",
-                    "total_after_discount": row[6] if len(row) > 6 else "",
-                    "downpayment": row[7] if len(row) > 7 else "",
+                    "code": get_cell(row, headers, "code"),
+                    "area": area,
+                    "total": total,
+                    "downpayment": get_cell(row, headers, "downpayment"),
                     "status": row_status
                 })
         return all_units
     except:
         return []
+
+def format_unit_details(unit):
+    status_emoji = "✅" if unit["status"] == "available" else "🔴" if unit["status"] == "reserved" else "🔵"
+    text = f"*{unit['code']}* - {unit['sheet']}\n\n"
+    if unit.get("area"):
+        text += f"📐 المساحة: {unit['area']}م²\n"
+    if unit.get("price"):
+        text += f"💰 سعر المتر: {unit['price']} جنيه\n"
+    if unit.get("discount"):
+        text += f"🏷️ الخصم: {unit['discount']} جنيه\n"
+    if unit.get("total"):
+        text += f"💵 السعر: {unit['total']} جنيه\n"
+    if unit.get("total_after") and unit.get("total_after") != unit.get("total"):
+        text += f"✨ بعد الخصم: {unit['total_after']} جنيه\n"
+    if unit.get("downpayment"):
+        text += f"🔑 المقدم: {unit['downpayment']}\n"
+    if unit.get("installments"):
+        text += f"📅 الأقساط: {unit['installments']}\n"
+    if unit.get("delivery"):
+        text += f"🏗️ دفعة التسليم: {unit['delivery']} جنيه\n"
+    text += f"📊 الحالة: {status_emoji} {unit['status']}"
+    return text
 
 def format_status(results):
     if not results:
@@ -197,7 +267,7 @@ def format_units(units, title=""):
             current_sheet = u["sheet"]
             result += f"*{current_sheet}:*\n"
         status_emoji = "✅" if u["status"] == "available" else "🔴" if u["status"] == "reserved" else "🔵"
-        result += f"• {u['code']} | {u['area']}م² | {u['total_after_discount']} | {status_emoji}\n"
+        result += f"• {u['code']} | {u['area']}م² | {u['total']} | {status_emoji}\n"
     return result
 
 def save_sale(project, unit, price, client_name):
@@ -376,18 +446,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if unit_code:
         unit = get_unit_from_sheet(unit_code, detected_project)
         if unit:
-            status_emoji = "✅" if unit["status"] == "available" else "🔴" if unit["status"] == "reserved" else "🔵"
-            text = f"*{unit['code']}* - {unit['sheet']}\n\n"
-            text += f"📐 المساحة: {unit['area']}م²\n"
-            text += f"💰 سعر المتر: {unit['price_per_meter']} جنيه\n"
-            text += f"🏷️ الخصم: {unit['discount']} جنيه\n"
-            text += f"💵 السعر الأصلي: {unit['total_price']}\n"
-            text += f"✨ بعد الخصم: {unit['total_after_discount']} جنيه\n"
-            text += f"🔑 المقدم: {unit['downpayment']} جنيه\n"
-            text += f"📅 القسط السنوي: {unit['batch_after_year']} جنيه\n"
-            text += f"💳 قيمة الأقساط: {unit['installments']} جنيه\n"
-            text += f"🏗️ دفعة التسليم: {unit['delivery_payment']} جنيه\n"
-            text += f"📊 الحالة: {status_emoji} {unit['status']}"
+            text = format_unit_details(unit)
             await update.message.reply_text(text, parse_mode="Markdown")
             return
 
@@ -459,7 +518,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 جميع الوحدات إدارية أو تجارية أو طبية.
 المشاريع: {", ".join(PROJECTS)}
 {f"معلومات {detected_project}:{chr(10)}{project_info}" if project_info else ""}
-أجب بشكل طبيعي ومختصر بدون ذكر معلومات الشركة العامة."""
+أجب بشكل طبيعي ومختصر."""
 
     history = get_history(user_id)
     response = client.messages.create(
