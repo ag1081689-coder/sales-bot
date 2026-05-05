@@ -13,29 +13,20 @@ SECRET_PASSWORD = os.environ.get("SECRET_PASSWORD", "Adel2026")
 PROJECTS = ["D11 BUSINESS", "D12 Medical", "METRO +", "TIJAN", "WW1", "WW2", "STAGE X", "RESALE", "MIDST"]
 
 PROJECT_ALIASES = {
-    "d11": "D11 BUSINESS",
-    "d11 business": "D11 BUSINESS",
-    "d12": "D12 Medical",
-    "d12 medical": "D12 Medical",
-    "ww1": "WW1",
-    "waterway 1": "WW1",
-    "ww2": "WW2",
-    "waterway 2": "WW2",
-    "tijan": "TIJAN",
-    "midst": "MIDST",
-    "stage x": "STAGE X",
-    "stagex": "STAGE X",
-    "resale": "RESALE",
-    "metro": "METRO +",
-    "metro +": "METRO +",
-    "metro plus": "METRO +",
+    "d11": "D11 BUSINESS", "d11 business": "D11 BUSINESS",
+    "d12": "D12 Medical", "d12 medical": "D12 Medical",
+    "ww1": "WW1", "waterway 1": "WW1",
+    "ww2": "WW2", "waterway 2": "WW2",
+    "tijan": "TIJAN", "midst": "MIDST",
+    "stage x": "STAGE X", "stagex": "STAGE X",
+    "resale": "RESALE", "metro": "METRO +",
+    "metro +": "METRO +", "metro plus": "METRO +",
 }
 
 creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
 gc = gspread.service_account_from_dict(creds_json)
 sh = gc.open_by_key(SHEET_ID)
 av_sh = gc.open_by_key(AV_SHEET_ID)
-
 client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
 user_context = {}
@@ -52,27 +43,17 @@ def get_sheet_headers(ws):
     for row in data[:3]:
         for i, cell in enumerate(row):
             c = cell.strip().lower().replace(" ", "").replace("_", "")
-            if c in ["code", "u."]:
-                headers["code"] = i
-            elif c == "area":
-                headers["area"] = i
-            elif c in ["price", "pricepermeter"]:
-                headers["price"] = i
-            elif c == "status":
-                headers["status"] = i
-            elif "totalpriceafterdi" in c or "totalpriceafterd" in c:
-                headers["total_after"] = i
+            if c in ["code", "u."]: headers["code"] = i
+            elif c == "area": headers["area"] = i
+            elif c in ["price", "pricepermeter"]: headers["price"] = i
+            elif c == "status": headers["status"] = i
+            elif "totalpriceafterdi" in c: headers["total_after"] = i
             elif c in ["totalprice", "total"]:
-                if "total_after" not in headers:
-                    headers["total"] = i
-            elif c in ["downpayment", "down"]:
-                headers["downpayment"] = i
-            elif c in ["instalments", "installments", "batchafteryear"]:
-                headers["installments"] = i
-            elif c in ["cashdiscount", "discount"]:
-                headers["discount"] = i
-            elif c in ["deliverypayment", "delivery"]:
-                headers["delivery"] = i
+                if "total_after" not in headers: headers["total"] = i
+            elif c in ["downpayment", "down"]: headers["downpayment"] = i
+            elif c in ["instalments", "installments", "batchafteryear"]: headers["installments"] = i
+            elif c in ["cashdiscount", "discount"]: headers["discount"] = i
+            elif c in ["deliverypayment", "delivery"]: headers["delivery"] = i
     sheet_headers_cache[ws.title] = headers
     return headers
 
@@ -112,10 +93,6 @@ def extract_area(text):
     return None
 
 def parse_project_unit(text):
-    """
-    يقرأ فورمات: PROJECT - UNIT CODE
-    مثال: WW1 - W1 C3 أو D11 - D11 B07
-    """
     if "-" in text:
         parts = text.split("-", 1)
         project_part = parts[0].strip()
@@ -124,22 +101,6 @@ def parse_project_unit(text):
         if detected and unit_part:
             return detected, unit_part.upper()
     return None, None
-
-def detect_unit_code(text):
-    text_upper = text.upper().strip()
-    pattern1 = r'\b([A-Z]{1,4}\d{1,2}\s+[A-Z]{1,2}\d{1,3})\b'
-    match = re.search(pattern1, text_upper)
-    if match:
-        return match.group(1).strip()
-    pattern2 = r'\b([A-Z]\d{1,2}\s+[A-Z]\d{1,3})\b'
-    match = re.search(pattern2, text_upper)
-    if match:
-        return match.group(1).strip()
-    pattern3 = r'\b(\d{1,2}\s+[A-Z]\s+\d{1,2})\b'
-    match = re.search(pattern3, text_upper)
-    if match:
-        return match.group(1).strip()
-    return None
 
 def get_unit_from_sheet(unit_code, project_filter=None):
     try:
@@ -155,8 +116,7 @@ def get_unit_from_sheet(unit_code, project_filter=None):
             for row in data[1:]:
                 if not row or not row[code_idx].strip():
                     continue
-                code_in_sheet = row[code_idx].strip().upper().replace(" ", "")
-                if code_in_sheet == search_code:
+                if row[code_idx].strip().upper().replace(" ", "") == search_code:
                     return {
                         "sheet": ws.title,
                         "code": get_cell(row, headers, "code"),
@@ -215,8 +175,7 @@ def get_all_units(project_filter=None, status_filter=None, area_filter=None):
                 area = get_cell(row, headers, "area")
                 if area_filter:
                     try:
-                        area_val = float(area.replace(",", "").strip())
-                        if abs(area_val - area_filter) > 2:
+                        if abs(float(area.replace(",", "")) - area_filter) > 2:
                             continue
                     except:
                         continue
@@ -233,25 +192,54 @@ def get_all_units(project_filter=None, status_filter=None, area_filter=None):
     except:
         return []
 
+def calculate_payment_plan(total_price_str, down_pct, years):
+    try:
+        total = float(re.sub(r'[^\d.]', '', total_price_str))
+        down = total * (down_pct / 100)
+        remaining = total - down
+        quarters = years * 4
+        quarterly = remaining / quarters if quarters > 0 else 0
+        monthly = remaining / (years * 12) if years > 0 else 0
+        return {
+            "total": total,
+            "down": down,
+            "remaining": remaining,
+            "quarterly": quarterly,
+            "monthly": monthly,
+            "years": years,
+            "down_pct": down_pct
+        }
+    except:
+        return None
+
+def format_payment_plan(unit, plan):
+    text = f"💳 *Payment Plan - {unit['code']}*\n"
+    text += f"🏢 المشروع: {unit['sheet']}\n"
+    text += f"📐 المساحة: {unit['area']}م²\n\n"
+    text += f"💵 السعر الإجمالي: {plan['total']:,.0f} جنيه\n"
+    text += f"🔑 المقدم {plan['down_pct']}%: {plan['down']:,.0f} جنيه\n"
+    text += f"📊 المتبقي: {plan['remaining']:,.0f} جنيه\n\n"
+    text += f"على {plan['years']} سنين:\n"
+    text += f"• قسط ربع سنوي: {plan['quarterly']:,.0f} جنيه\n"
+    text += f"• قسط شهري: {plan['monthly']:,.0f} جنيه\n"
+    return text
+
 def format_unit_details(unit):
     status_emoji = "✅" if unit["status"] == "available" else "🔴" if unit["status"] == "reserved" else "🔵"
     text = f"*{unit['code']}* - {unit['sheet']}\n\n"
     if unit.get("area"):
         text += f"📐 المساحة: {unit['area']}م²\n"
-    if unit.get("price") and unit.get("price") not in ["available", "reserved", "hold"]:
-        text += f"💰 سعر المتر: {unit['price']} جنيه\n"
-    if unit.get("discount") and unit.get("discount") not in ["available", "reserved", "hold"]:
-        text += f"🏷️ الخصم: {unit['discount']} جنيه\n"
-    if unit.get("total"):
+    price = unit.get("price", "")
+    if price and price not in ["available", "reserved", "hold"]:
+        text += f"💰 سعر المتر: {price} جنيه\n"
+    if unit.get("total_after") and unit.get("total_after") not in ["available", "reserved", "hold"]:
+        text += f"✨ السعر بعد الخصم: {unit['total_after']} جنيه\n"
+    elif unit.get("total") and unit.get("total") not in ["available", "reserved", "hold"]:
         text += f"💵 السعر: {unit['total']} جنيه\n"
-    if unit.get("total_after") and unit.get("total_after") != unit.get("total"):
-        text += f"✨ بعد الخصم: {unit['total_after']} جنيه\n"
     if unit.get("downpayment") and unit.get("downpayment") not in ["available", "reserved", "hold"]:
         text += f"🔑 المقدم: {unit['downpayment']}\n"
     if unit.get("installments") and unit.get("installments") not in ["available", "reserved", "hold"]:
         text += f"📅 الأقساط: {unit['installments']}\n"
-    if unit.get("delivery") and unit.get("delivery") not in ["available", "reserved", "hold"]:
-        text += f"🏗️ دفعة التسليم: {unit['delivery']} جنيه\n"
     text += f"📊 الحالة: {status_emoji} {unit['status']}"
     return text
 
@@ -261,24 +249,20 @@ def format_status(results):
     text = ""
     for project, counts in results.items():
         total = sum(counts.values())
-        text += f"📊 *{project}*\n"
-        text += f"✅ متاح: {counts['available']}\n"
-        text += f"🔴 محجوز: {counts['reserved']}\n"
-        text += f"🔵 Hold: {counts['hold']}\n"
-        text += f"📦 الإجمالي: {total}\n\n"
-    return text if text else "لا توجد بيانات."
+        text += f"📊 *{project}*\n✅ {counts['available']} | 🔴 {counts['reserved']} | 🔵 {counts['hold']} | 📦 {total}\n\n"
+    return text
 
 def format_units(units, title=""):
     if not units:
         return "لا توجد وحدات بهذه المواصفات."
     result = f"*{title}*\n\n" if title else ""
     current_sheet = ""
-    for u in units[:30]:
+    for u in units[:25]:
         if u["sheet"] != current_sheet:
             current_sheet = u["sheet"]
             result += f"*{current_sheet}:*\n"
-        status_emoji = "✅" if u["status"] == "available" else "🔴" if u["status"] == "reserved" else "🔵"
-        result += f"• {u['code']} | {u['area']}م² | {u['total']} | {status_emoji}\n"
+        e = "✅" if u["status"] == "available" else "🔴" if u["status"] == "reserved" else "🔵"
+        result += f"• {u['code']} | {u['area']}م² | {u['total']} | {e}\n"
     return result
 
 def save_sale(project, unit, price, client_name):
@@ -289,8 +273,7 @@ def save_sale(project, unit, price, client_name):
             ws = sh.add_worksheet(title="المبيعات", rows=1000, cols=10)
             ws.append_row(["المشروع", "الوحدة", "السعر", "اسم العميل", "التاريخ"])
         from datetime import datetime
-        date = datetime.now().strftime("%Y-%m-%d %H:%M")
-        ws.append_row([project, unit, price, client_name, date])
+        ws.append_row([project, unit, price, client_name, datetime.now().strftime("%Y-%m-%d %H:%M")])
         return True
     except:
         return False
@@ -301,11 +284,7 @@ def get_sales_data():
         data = ws.get_all_values()
         if len(data) <= 1:
             return "لا توجد مبيعات مسجلة حتى الآن."
-        result = ""
-        for row in data[1:]:
-            if len(row) >= 4:
-                result += f"• {row[0]} - {row[1]} - {row[2]} - {row[3]} - {row[4]}\n"
-        return result
+        return "\n".join([f"• {r[0]} - {r[1]} - {r[2]} - {r[3]} - {r[4]}" for r in data[1:] if len(r) >= 4])
     except:
         return "لا توجد مبيعات مسجلة."
 
@@ -313,33 +292,20 @@ def get_project_info(project_name):
     try:
         ws = sh.worksheet(project_name)
         data = ws.get_all_values()
-        result = ""
-        for row in data[1:]:
-            if len(row) >= 2 and row[0] and row[1]:
-                result += f"{row[0]}: {row[1]}\n"
-        return result
+        return "\n".join([f"{r[0]}: {r[1]}" for r in data[1:] if len(r) >= 2 and r[0] and r[1]])
     except:
         return ""
 
 def get_style_buttons():
-    keyboard = [
-        [
-            InlineKeyboardButton("😣 Pain Point", callback_data="style_pain"),
-            InlineKeyboardButton("📊 المقارنة", callback_data="style_compare")
-        ],
-        [
-            InlineKeyboardButton("⏰ FOMO", callback_data="style_fomo"),
-            InlineKeyboardButton("💰 ROI والأرقام", callback_data="style_roi")
-        ],
-        [
-            InlineKeyboardButton("📖 القصة", callback_data="style_story"),
-            InlineKeyboardButton("⭐ Social Proof", callback_data="style_social")
-        ],
-        [
-            InlineKeyboardButton("💎 Exclusivity", callback_data="style_exclusive")
-        ]
-    ]
-    return InlineKeyboardMarkup(keyboard)
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("😣 Pain Point", callback_data="style_pain"),
+         InlineKeyboardButton("📊 المقارنة", callback_data="style_compare")],
+        [InlineKeyboardButton("⏰ FOMO", callback_data="style_fomo"),
+         InlineKeyboardButton("💰 ROI والأرقام", callback_data="style_roi")],
+        [InlineKeyboardButton("📖 القصة", callback_data="style_story"),
+         InlineKeyboardButton("⭐ Social Proof", callback_data="style_social")],
+        [InlineKeyboardButton("💎 Exclusivity", callback_data="style_exclusive")]
+    ])
 
 STYLES = {
     "style_pain": ("Pain Point", "ابدأ بمشكلة العميل"),
@@ -365,11 +331,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     chat_history[user_id] = []
     await update.message.reply_text(
-        "مرحباً! يمكنني مساعدتك في:\n\n"
-        "• تفاصيل وحدة:\n  WW1 - W1 C3\n  D11 - D11 B07\n\n"
-        "• الوحدات المتاحة والمحجوزة\n"
-        "• إعلانات وسكريبتات\n"
-        "• تسجيل المبيعات"
+        "مرحباً! أنا مساعدك الذكي في معمار دجلة 🏢\n\n"
+        "كلمني بشكل طبيعي وأنا هساعدك.\n"
+        "للبحث عن وحدة: WW1 - W1 C3\n"
+        "للـ Payment Plan: payment plan WW1 - W1 C3 مقدم 20% على 5 سنين"
     )
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -385,17 +350,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     request = saved.get("request", "")
     project_info = get_project_info(project) if project else ""
 
-    system = f"""أنت خبير تسويق عقاري في شركة معمار دجلة.
-معلومات المشروع: {project_info}
-تفاصيل العميل: {request}
-الأسلوب: {style_name} - {style_instruction}
-اكتب سكريبت واتساب بأسلوب مصري راقٍ.
-لا تذكر أي اسم غير معمار دجلة."""
-
     response = client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=800,
-        system=system,
+        system=f"""أنت خبير تسويق عقاري في معمار دجلة.
+معلومات المشروع: {project_info}
+تفاصيل: {request}
+الأسلوب: {style_name} - {style_instruction}
+اكتب سكريبت واتساب بأسلوب مصري راقٍ. لا تذكر غير معمار دجلة.""",
         messages=[{"role": "user", "content": f"اكتب سكريبت {style_name} لمشروع {project}"}]
     )
     await query.edit_message_text(
@@ -410,53 +372,68 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if user_context.get(user_id, {}).get("waiting_password"):
         if user_message == SECRET_PASSWORD:
-            user_context[user_id]["waiting_password"] = False
-            user_context[user_id]["authenticated"] = True
-            sales = get_sales_data()
-            await update.message.reply_text(f"سجل المبيعات:\n\n{sales}")
+            user_context[user_id] = {"authenticated": True}
+            await update.message.reply_text(f"سجل المبيعات:\n\n{get_sales_data()}")
         else:
             await update.message.reply_text("كلمة المرور غير صحيحة.")
         return
 
-    if "مبيعات" in msg_lower or "بايعين" in msg_lower or "احنا بعنا" in msg_lower:
+    if "مبيعات" in msg_lower or "بايعين" in msg_lower:
         if user_context.get(user_id, {}).get("authenticated"):
-            sales = get_sales_data()
-            await update.message.reply_text(f"سجل المبيعات:\n\n{sales}")
+            await update.message.reply_text(f"سجل المبيعات:\n\n{get_sales_data()}")
         else:
             user_context[user_id] = {"waiting_password": True}
             await update.message.reply_text("من فضلك أدخل كلمة المرور:")
         return
 
     if "بيعة" in msg_lower or "بعنا" in msg_lower or "اتباع" in msg_lower:
-        system = """استخرج معلومات البيعة وأرجع JSON فقط:
-{"action":"sale","project":"اسم","unit":"وحدة","price":"سعر","client":"عميل"}"""
         response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=200,
-            system=system,
+            model="claude-haiku-4-5-20251001", max_tokens=200,
+            system='استخرج معلومات البيعة وأرجع JSON فقط: {"action":"sale","project":"اسم","unit":"وحدة","price":"سعر","client":"عميل"}',
             messages=[{"role": "user", "content": user_message}]
         )
-        reply = response.content[0].text.strip()
         try:
+            reply = response.content[0].text.strip()
             data = json.loads(reply[reply.find("{"):reply.rfind("}")+1])
             if data.get("action") == "sale":
                 save_sale(data["project"], data["unit"], data["price"], data["client"])
-                await update.message.reply_text(
-                    f"✅ تم تسجيل البيعة\n"
-                    f"المشروع: {data['project']} | الوحدة: {data['unit']}\n"
-                    f"السعر: {data['price']} | العميل: {data['client']}"
-                )
+                await update.message.reply_text(f"✅ تم تسجيل البيعة\n{data['project']} | {data['unit']} | {data['price']} | {data['client']}")
             return
         except:
             pass
 
-    # فورمات PROJECT - UNIT
+    # Payment Plan
+    if "payment plan" in msg_lower or "بلان" in msg_lower or "خطة سداد" in msg_lower:
+        detected_project, unit_code = parse_project_unit(user_message)
+        if detected_project and unit_code:
+            unit = get_unit_from_sheet(unit_code, detected_project)
+            if unit:
+                total_str = unit.get("total_after") or unit.get("total", "0")
+                down_match = re.search(r'(\d+)\s*%', user_message)
+                years_match = re.search(r'(\d+)\s*سن', user_message)
+                down_pct = int(down_match.group(1)) if down_match else 20
+                years = int(years_match.group(1)) if years_match else 5
+                plan = calculate_payment_plan(total_str, down_pct, years)
+                if plan:
+                    text = format_payment_plan(unit, plan)
+                    await update.message.reply_text(text, parse_mode="Markdown")
+                    return
+
+        # لو مفيش كود محدد اسأل Claude يحسب
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001", max_tokens=600,
+            system="أنت مساعد مبيعات عقاري في معمار دجلة. احسب خطة السداد بالأرقام بشكل واضح ومنظم.",
+            messages=[{"role": "user", "content": user_message}]
+        )
+        await update.message.reply_text(response.content[0].text)
+        return
+
+    # البحث عن وحدة
     detected_project, unit_code = parse_project_unit(user_message)
     if detected_project and unit_code:
         unit = get_unit_from_sheet(unit_code, detected_project)
         if unit:
-            text = format_unit_details(unit)
-            await update.message.reply_text(text, parse_mode="Markdown")
+            await update.message.reply_text(format_unit_details(unit), parse_mode="Markdown")
         else:
             await update.message.reply_text(f"مش لاقي الوحدة {unit_code} في {detected_project}")
         return
@@ -464,82 +441,64 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     detected_project = detect_project(user_message)
     area_filter = extract_area(user_message)
 
-    keywords_all = ["كل المشاريع", "كل حاجه", "الكل", "جميع", "overview"]
-    keywords_status = ["كام وحدة", "وحدات", "متاح", "reserved", "hold", "الوضع", "احصائيه", "احصائية", "كام", "إتاحة", "اتاحة", "اتاحه"]
-    keywords_available = ["متاح", "available", "فاضي", "المتاح"]
+    keywords_all = ["كل المشاريع", "كل حاجه", "الكل", "جميع"]
+    keywords_status = ["كام وحدة", "وحدات", "متاح", "reserved", "hold", "احصائيه", "كام", "إتاحة", "اتاحه"]
+    keywords_available = ["متاح", "available", "فاضي"]
 
     if any(k in msg_lower for k in keywords_all) and not detected_project:
-        results = get_project_status()
-        text = format_status(results)
+        text = format_status(get_project_status())
         await update.message.reply_text(f"📊 *ملخص جميع المشاريع*\n\n{text}", parse_mode="Markdown")
         return
 
     if any(k in msg_lower for k in keywords_status):
-        status_filter = None
-        if any(k in msg_lower for k in keywords_available):
-            status_filter = "available"
-        elif "reserved" in msg_lower or "محجوز" in msg_lower:
-            status_filter = "reserved"
-        elif "hold" in msg_lower:
-            status_filter = "hold"
-
+        status_filter = "available" if any(k in msg_lower for k in keywords_available) else \
+                       "reserved" if "reserved" in msg_lower or "محجوز" in msg_lower else \
+                       "hold" if "hold" in msg_lower else None
         if area_filter or status_filter or detected_project:
-            units = get_all_units(project_filter=detected_project, status_filter=status_filter, area_filter=area_filter)
-            title = "الوحدات"
-            if status_filter:
-                title += f" {status_filter}"
-            if area_filter:
-                title += f" ({area_filter}م²)"
-            if detected_project:
-                title += f" في {detected_project}"
-            text = format_units(units, title)
-            await update.message.reply_text(text, parse_mode="Markdown")
+            units = get_all_units(detected_project, status_filter, area_filter)
+            title = f"الوحدات{' ' + status_filter if status_filter else ''}{' (' + str(area_filter) + 'م²)' if area_filter else ''}{' في ' + detected_project if detected_project else ''}"
+            await update.message.reply_text(format_units(units, title), parse_mode="Markdown")
         else:
-            results = get_project_status()
-            text = format_status(results)
-            await update.message.reply_text(f"📊 *ملخص المشاريع*\n\n{text}", parse_mode="Markdown")
+            await update.message.reply_text(f"📊 *ملخص المشاريع*\n\n{format_status(get_project_status())}", parse_mode="Markdown")
         return
-
-    project_info = get_project_info(detected_project) if detected_project else ""
 
     if "سكريبت" in msg_lower:
         user_context[user_id] = {"project": detected_project or "", "request": user_message}
-        await update.message.reply_text(
-            f"سكريبت {detected_project or ''} - اختر الأسلوب:",
-            reply_markup=get_style_buttons()
-        )
+        await update.message.reply_text(f"سكريبت {detected_project or ''} - اختر الأسلوب:", reply_markup=get_style_buttons())
         return
 
     if "اعلان" in msg_lower or "إعلان" in msg_lower:
-        system = f"""أنت خبير تسويق عقاري في معمار دجلة.
-معلومات المشروع: {project_info}
-اكتب 3 صيغ إعلانية بأسلوب مصري راقٍ.
-لا تذكر أي اسم غير معمار دجلة."""
+        project_info = get_project_info(detected_project) if detected_project else ""
         response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=1200,
-            system=system,
+            model="claude-haiku-4-5-20251001", max_tokens=1200,
+            system=f"أنت خبير تسويق عقاري في معمار دجلة.\nمعلومات المشروع: {project_info}\nاكتب 3 صيغ إعلانية بأسلوب مصري راقٍ.",
             messages=[{"role": "user", "content": user_message}]
         )
         await update.message.reply_text(response.content[0].text)
         return
 
+    # المحادثة الذكية
     add_to_history(user_id, "user", user_message)
 
-    system = f"""أنت مساعد فريق مبيعات شركة معمار دجلة.
-تتحدث بأسلوب مصري راقٍ وطبيعي ومختصر.
-اسم الشركة دائماً "معمار دجلة" فقط.
-جميع الوحدات إدارية أو تجارية أو طبية.
+    units_context = ""
+    if detected_project or area_filter:
+        units = get_all_units(project_filter=detected_project, status_filter="available", area_filter=area_filter)
+        if units:
+            units_context = f"\nالوحدات المتاحة:\n" + "\n".join([f"• {u['code']} | {u['area']}م² | {u['total']}" for u in units[:10]])
+
+    system = f"""أنت مساعد مبيعات ذكي في شركة معمار دجلة.
+تتحدث بأسلوب مصري راقٍ وطبيعي - مش روبوت، بتتناقش وبتساعد.
+جميع الوحدات إدارية أو تجارية أو طبية - لا توجد سكنية.
 المشاريع: {", ".join(PROJECTS)}
-{f"معلومات {detected_project}:{chr(10)}{project_info}" if project_info else ""}
-للبحث عن وحدة استخدم: اسم المشروع - كود الوحدة
-مثال: WW1 - W1 C3
-أجب بشكل طبيعي ومختصر."""
+{units_context}
+للبحث عن وحدة: PROJECT - UNIT CODE (مثال: WW1 - W1 C3)
+للـ payment plan: payment plan PROJECT - UNIT مقدم X% على Y سنين
+ساعد السيلز يلاقي الوحدة المناسبة واسأل عن احتياجات العميل."""
 
     history = get_history(user_id)
     response = client.messages.create(
         model="claude-haiku-4-5-20251001",
-        max_tokens=500,
+        max_tokens=600,
         system=system,
         messages=history
     )
