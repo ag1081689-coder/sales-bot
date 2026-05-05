@@ -28,7 +28,6 @@ chat_history = {}
 current_unit = {}
 headers_cache = {}
 
-# ── helpers ──────────────────────────────────────────────
 def clean(s):
     try: return float(re.sub(r'[^\d.]', '', str(s)))
     except: return 0
@@ -74,7 +73,7 @@ def gcell(row, h, k, d=""):
 
 def get_status(row, h):
     i = h.get("status")
-    if i and i < len(row):
+    if i is not None and i < len(row):
         v = row[i].strip().lower()
         if v in ["available","reserved","hold"]: return v
     for c in row:
@@ -98,7 +97,6 @@ def row_to_unit(row, ws_title, h):
         "status": get_status(row,h)
     }
 
-# ── sheet queries ─────────────────────────────────────────
 def find_unit(code, project=None):
     code = code.strip().upper().replace(" ","")
     for ws in av_sh.worksheets():
@@ -141,25 +139,6 @@ def project_stats(pfilter=None):
         if sum(cnt.values()) > 0: res[ws.title] = cnt
     return res
 
-def all_units(pfilter=None, sfilter=None, afilter=None):
-    out = []
-    for ws in av_sh.worksheets():
-        if pfilter and pfilter.lower() not in ws.title.lower(): continue
-        h = get_headers(ws)
-        ci = h.get("code",0)
-        for row in (ws.get_all_values() or [])[1:]:
-            if not row or not row[ci].strip(): continue
-            s = get_status(row,h)
-            if not s or s not in ["available","reserved","hold"]: continue
-            if sfilter and s != sfilter: continue
-            u = row_to_unit(row, ws.title, h)
-            if afilter:
-                try:
-                    if abs(float(u["area"].replace(",","")) - afilter) > 2: continue
-                except: continue
-            out.append(u)
-    return out
-
 def save_sale(project, unit, price, client_name):
     try:
         try: ws = sh.worksheet("المبيعات")
@@ -168,8 +147,7 @@ def save_sale(project, unit, price, client_name):
             ws.append_row(["المشروع","الوحدة","السعر","العميل","التاريخ"])
         from datetime import datetime
         ws.append_row([project, unit, price, client_name, datetime.now().strftime("%Y-%m-%d %H:%M")])
-        return True
-    except: return False
+    except: pass
 
 def get_sales():
     try:
@@ -179,7 +157,6 @@ def get_sales():
         return "\n".join([f"• {r[0]}-{r[1]}-{r[2]}-{r[3]}-{r[4]}" for r in data[1:] if len(r)>=4])
     except: return "لا توجد مبيعات."
 
-# ── formatters ────────────────────────────────────────────
 def fmt_unit(u):
     e = "✅" if u["status"]=="available" else "🔴" if u["status"]=="reserved" else "🔵"
     t = f"*{u['code']}* - {u['sheet']}\n"
@@ -194,18 +171,6 @@ def fmt_unit(u):
 def fmt_stats(res):
     if not res: return "لا توجد بيانات."
     return "".join([f"📊 *{p}*\n✅{c['available']} 🔴{c['reserved']} 🔵{c['hold']} 📦{sum(c.values())}\n\n" for p,c in res.items()])
-
-def fmt_list(units, title=""):
-    if not units: return "لا توجد وحدات."
-    r = f"*{title}*\n\n" if title else ""
-    cur = ""
-    for u in units[:20]:
-        if u["sheet"] != cur:
-            cur = u["sheet"]
-            r += f"*{cur}:*\n"
-        e = "✅" if u["status"]=="available" else "🔴" if u["status"]=="reserved" else "🔵"
-        r += f"• {u['code']} | {u['area']}م² | {u['total']} | {e}\n"
-    return r
 
 def fmt_plan(u, plan):
     return (f"💳 *Payment Plan - {u['code']}*\n"
@@ -252,7 +217,6 @@ def add_h(uid, role, content):
 
 def get_h(uid): return chat_history.get(uid, [])
 
-# ── handlers ──────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.message.from_user.id
     chat_history[uid] = []
@@ -262,7 +226,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• وحدة بكودها: WW1 - W1 C3\n"
         "• ميزانية: عميل مقدمه 500 ألف إجمالي من 2 ل 2.5 مليون\n"
         "• Payment Plan: payment plan WW1 - W1 C3 مقدم 20% على 5 سنين\n"
-        "• لما تخلص من وحدة قول: تمام"
+        "• لما تخلص قول: تمام"
     )
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -272,12 +236,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sk = q.data
     if sk not in STYLES: return
     sname, sinst = STYLES[sk]
-    saved = user_context.get(uid, {})
     u = current_unit.get(uid)
-    unit_ctx = f"\nالوحدة: {json.dumps(u, ensure_ascii=False)}" if u else ""
+    unit_data = fmt_unit(u) if u else ""
     res = client.messages.create(
         model="claude-haiku-4-5-20251001", max_tokens=800,
-        system=f"أنت خبير تسويق في معمار دجلة - العاشر من رمضان - وحدات إدارية وتجارية وطبية فقط.\n{unit_ctx}\nالأسلوب: {sname} - {sinst}\nاكتب سكريبت واتساب مصري راقٍ.",
+        system=f"""أنت خبير تسويق في معمار دجلة - العاشر من رمضان - وحدات إدارية وتجارية وطبية فقط.
+بيانات الوحدة من الشيت:
+{unit_data}
+الأسلوب: {sname} - {sinst}
+اكتب سكريبت واتساب مصري راقٍ بناءً على البيانات دي فقط.""",
         messages=[{"role":"user","content":f"اكتب سكريبت {sname}"}]
     )
     await q.edit_message_text(f"*سكريبت {sname}*\n\n{res.content[0].text}", parse_mode="Markdown")
@@ -287,7 +254,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.message.from_user.id
     ml = msg.lower()
 
-    # password
     if user_context.get(uid, {}).get("waiting_password"):
         if msg == SECRET_PASSWORD:
             user_context[uid] = {"authenticated": True}
@@ -304,7 +270,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("أدخل كلمة المرور:")
         return
 
-    # تسجيل بيعة
     if "بيعة" in ml or "بعنا" in ml or "اتباع" in ml:
         res = client.messages.create(
             model="claude-haiku-4-5-20251001", max_tokens=200,
@@ -317,14 +282,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if d.get("action") == "sale":
                 save_sale(d["project"],d["unit"],d["price"],d["client"])
                 current_unit.pop(uid, None)
-                await update.message.reply_text(f"✅ بيعة: {d['project']} | {d['unit']} | {d['price']} | {d['client']}")
+                await update.message.reply_text(f"✅ {d['project']} | {d['unit']} | {d['price']} | {d['client']}")
             return
         except: pass
 
     # تمام = مسح الوحدة
-    if ml.strip() in ["تمام","ok","okay","تم","موافق","next","التالي"]:
+    if ml.strip() in ["تمام","ok","okay","تم","موافق","next"]:
         current_unit.pop(uid, None)
         await update.message.reply_text("تمام! في وحدة أو عميل تاني؟")
+        return
+
+    # سكريبت للوحدة الحالية أو وحدة محددة
+    if "سكريبت" in ml:
+        p, uc = parse_pu(msg)
+        if p and uc:
+            u = find_unit(uc, p)
+            if u: current_unit[uid] = u
+        u = current_unit.get(uid)
+        if u:
+            await update.message.reply_text(f"سكريبت للوحدة {u['code']} - اختر الأسلوب:", reply_markup=style_buttons())
+        else:
+            await update.message.reply_text("ابعت الوحدة الأول، مثال: WW1 - W1 C3")
         return
 
     # payment plan
@@ -341,6 +319,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 add_h(uid,"assistant",f"Payment Plan {u['code']}")
                 await update.message.reply_text(fmt_plan(u, plan), parse_mode="Markdown")
                 return
+        await update.message.reply_text("ابعت الوحدة الأول، مثال: payment plan WW1 - W1 C3 مقدم 20% على 5 سنين")
+        return
 
     # بحث بالكود
     p, uc = parse_pu(msg)
@@ -385,52 +365,46 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # إحصائيات
     dp = detect_project(msg)
     if any(k in ml for k in ["كام وحدة","كل المشاريع","جميع","إتاحة","اتاحه","احصائيه"]):
-        res = project_stats(dp)
-        await update.message.reply_text(fmt_stats(res), parse_mode="Markdown")
+        await update.message.reply_text(fmt_stats(project_stats(dp)), parse_mode="Markdown")
         return
 
-    if any(k in ml for k in ["وحدات متاح","وحدات محجوز","وحدات hold"]):
-        sf = "available" if "متاح" in ml else "reserved" if "محجوز" in ml else "hold"
-        units = all_units(dp, sf)
-        await update.message.reply_text(fmt_list(units, f"الوحدات {sf}"), parse_mode="Markdown")
-        return
-
-    # سكريبت / إعلان
-    if "سكريبت" in ml:
-        user_context[uid] = {"project": dp or "", "request": msg}
-        await update.message.reply_text("اختر الأسلوب:", reply_markup=style_buttons())
-        return
-
+    # إعلان
     if "اعلان" in ml or "إعلان" in ml:
+        u = current_unit.get(uid)
+        unit_data = f"\nبيانات الوحدة:\n{fmt_unit(u)}" if u else ""
         res = client.messages.create(
             model="claude-haiku-4-5-20251001", max_tokens=1000,
-            system=f"أنت خبير تسويق في معمار دجلة - العاشر من رمضان - وحدات إدارية وتجارية وطبية.\nاكتب 3 صيغ إعلانية مصرية راقية.",
+            system=f"أنت خبير تسويق في معمار دجلة - العاشر من رمضان - وحدات إدارية وتجارية وطبية.{unit_data}\nاكتب 3 صيغ إعلانية مصرية راقية بناءً على البيانات دي فقط.",
             messages=[{"role":"user","content":msg}]
         )
         await update.message.reply_text(res.content[0].text)
         return
 
-    # محادثة ذكية
-    add_h(uid,"user",msg)
+    # محادثة - بس لو في وحدة محفوظة
     u = current_unit.get(uid)
-    unit_ctx = f"\nالوحدة الحالية: {fmt_unit(u)}" if u else ""
-
-    res = client.messages.create(
-        model="claude-haiku-4-5-20251001", max_tokens=400,
-        system=f"""أنت مساعد مبيعات في معمار دجلة - العاشر من رمضان.
-وحدات إدارية وتجارية وطبية فقط - لا سكني.
-المشاريع: {", ".join(PROJECTS)}
-{unit_ctx}
-قواعد:
-- كل المعلومات من الشيت فقط - لا تخترع أرقام
-- لو السيلز سأل عن وحدات متاحة اطلب منه يكتب: PROJECT - UNIT CODE أو ميزانية العميل
-- حافظ على سياق المحادثة
-- رد مختصر ومباشر بالعربي""",
-        messages=get_h(uid)
-    )
-    reply = res.content[0].text.strip()
-    add_h(uid,"assistant",reply)
-    await update.message.reply_text(reply)
+    if u:
+        add_h(uid,"user",msg)
+        res = client.messages.create(
+            model="claude-haiku-4-5-20251001", max_tokens=400,
+            system=f"""أنت مساعد مبيعات في معمار دجلة.
+بيانات الوحدة الحالية من الشيت:
+{fmt_unit(u)}
+قواعد صارمة:
+- تكلم بس عن البيانات الموجودة فوق
+- لا تخترع أي معلومات إضافية
+- لو سألك عن حاجة مش في البيانات قول: "المعلومة دي مش في الشيت"
+- رد مختصر بالعربي""",
+            messages=get_h(uid)
+        )
+        reply = res.content[0].text.strip()
+        add_h(uid,"assistant",reply)
+        await update.message.reply_text(reply)
+    else:
+        await update.message.reply_text(
+            "ابعت كود الوحدة أو ميزانية العميل:\n"
+            "• وحدة: WW1 - W1 C3\n"
+            "• ميزانية: عميل مقدمه 500 ألف إجمالي من 2 ل 2.5 مليون"
+        )
 
 def main():
     app = Application.builder().token(os.environ["TELEGRAM_TOKEN"]).build()
