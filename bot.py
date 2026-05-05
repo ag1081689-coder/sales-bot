@@ -10,7 +10,7 @@ SHEET_ID = "1x5CfKVrgXZy1-1yVPoqAwcS0KpxeOyzxfA8shDt2qkw"
 AV_SHEET_ID = "1f-1lkgr7nGiQofoREnhfbszjaJFu17OtZaMJ09_sLWw"
 SECRET_PASSWORD = os.environ.get("SECRET_PASSWORD", "Adel2026")
 
-PROJECTS = ["D11 BUSINESS", "D12 Medical", "METRO +", "TIJAN", "WW1", "WW2", "STAGE X", "RESALE"]
+PROJECTS = ["D11 BUSINESS", "D12 Medical", "METRO +", "TIJAN", "WW1", "WW2", "STAGE X", "RESALE", "MIDST"]
 
 PROJECT_ALIASES = {
     "d11": "D11 BUSINESS",
@@ -22,6 +22,7 @@ PROJECT_ALIASES = {
     "ww2": "WW2",
     "waterway 2": "WW2",
     "tijan": "TIJAN",
+    "midst": "MIDST",
     "stage x": "STAGE X",
     "stagex": "STAGE X",
     "resale": "RESALE",
@@ -68,44 +69,43 @@ def extract_area(text):
     return None
 
 def detect_unit_code(text):
-    pattern = r'\b([A-Za-z0-9]{1,5}\s*[A-Za-z0-9]{1,5})\b'
+    # يدور على كود زي D11 B01 أو WW1 C3
+    pattern = r'\b([A-Za-z0-9]+\s+[A-Za-z0-9]+)\b'
     matches = re.findall(pattern, text.upper())
     for m in matches:
-        m = m.strip()
-        if len(m) >= 2 and any(c.isdigit() for c in m) and any(c.isalpha() for c in m):
-            return m
+        parts = m.strip().split()
+        if len(parts) == 2 and any(c.isdigit() for c in parts[1]):
+            return m.strip()
     return None
 
-def get_unit_from_av_sheet(unit_code, project_filter=None):
+def get_unit_from_sheet(unit_code, project_filter=None):
     try:
         for ws in av_sh.worksheets():
             if project_filter and project_filter.lower() not in ws.title.lower():
                 continue
             data = ws.get_all_values()
-            headers = data[0] if data else []
+            if not data:
+                continue
             for row in data[1:]:
-                if not row:
+                if not row or not row[0].strip():
                     continue
-                code_cell = row[2].strip().upper().replace(" ", "") if len(row) > 2 else ""
-                search_code = unit_code.strip().upper().replace(" ", "")
-                if code_cell == search_code:
-                    status = row[7].strip() if len(row) > 7 else ""
-                    unit_type = row[8].strip() if len(row) > 8 else ""
-                    pp = row[9].strip() if len(row) > 9 else ""
-                    ex_date = row[10].strip() if len(row) > 10 else ""
-                    team_leader = row[11].strip() if len(row) > 11 else ""
+                code_in_sheet = row[0].strip().upper().replace(" ", "")
+                code_search = unit_code.strip().upper().replace(" ", "")
+                if code_in_sheet == code_search:
+                    # الأعمدة: A=code, C=area, D=price/m, E=discount, F=total, G=total after discount, H=down, I=batch, K=installments, L=delivery, M=status
                     return {
                         "sheet": ws.title,
-                        "code": row[2] if len(row) > 2 else "",
-                        "area": row[3] if len(row) > 3 else "",
-                        "price": row[4] if len(row) > 4 else "",
-                        "total": row[5] if len(row) > 5 else "",
-                        "project": row[6] if len(row) > 6 else "",
-                        "status": status,
-                        "type": unit_type,
-                        "pp": pp,
-                        "ex_date": ex_date,
-                        "team_leader": team_leader
+                        "code": row[0] if len(row) > 0 else "",
+                        "area": row[2] if len(row) > 2 else "",
+                        "price_per_meter": row[3] if len(row) > 3 else "",
+                        "discount": row[4] if len(row) > 4 else "",
+                        "total_price": row[5] if len(row) > 5 else "",
+                        "total_after_discount": row[6] if len(row) > 6 else "",
+                        "downpayment": row[7] if len(row) > 7 else "",
+                        "batch_after_year": row[8] if len(row) > 8 else "",
+                        "installments": row[10] if len(row) > 10 else "",
+                        "delivery_payment": row[11] if len(row) > 11 else "",
+                        "status": row[12] if len(row) > 12 else ""
                     }
         return None
     except:
@@ -120,8 +120,8 @@ def get_project_status(project_filter=None):
             data = ws.get_all_values()
             counts = {"available": 0, "reserved": 0, "hold": 0}
             for row in data[1:]:
-                if len(row) > 7:
-                    s = row[7].strip().lower()
+                if len(row) > 12:
+                    s = row[12].strip().lower()
                     if s in counts:
                         counts[s] += 1
             if sum(counts.values()) > 0:
@@ -130,7 +130,7 @@ def get_project_status(project_filter=None):
     except:
         return {}
 
-def get_all_units(project_filter=None, status_filter=None, area_filter=None, unit_type_filter=None):
+def get_all_units(project_filter=None, status_filter=None, area_filter=None):
     try:
         all_units = []
         for ws in av_sh.worksheets():
@@ -138,33 +138,27 @@ def get_all_units(project_filter=None, status_filter=None, area_filter=None, uni
                 continue
             data = ws.get_all_values()
             for row in data[1:]:
-                if len(row) < 8 or not row[2].strip():
+                if not row or not row[0].strip() or len(row) < 13:
                     continue
-                row_status = row[7].strip().lower() if len(row) > 7 else ""
+                row_status = row[12].strip().lower()
                 if not row_status:
                     continue
                 if status_filter and row_status != status_filter.lower():
                     continue
-                if unit_type_filter and unit_type_filter.lower() not in (row[8].strip().lower() if len(row) > 8 else ""):
-                    continue
                 if area_filter:
                     try:
-                        area_val = float(str(row[3]).replace(",", "").strip())
+                        area_val = float(str(row[2]).replace(",", "").strip())
                         if abs(area_val - area_filter) > 2:
                             continue
                     except:
                         continue
                 all_units.append({
                     "sheet": ws.title,
-                    "code": row[2],
-                    "area": row[3] if len(row) > 3 else "",
-                    "price": row[4] if len(row) > 4 else "",
-                    "total": row[5] if len(row) > 5 else "",
-                    "project": row[6] if len(row) > 6 else "",
-                    "status": row_status,
-                    "type": row[8] if len(row) > 8 else "",
-                    "ex_date": row[10] if len(row) > 10 else "",
-                    "team_leader": row[11] if len(row) > 11 else ""
+                    "code": row[0],
+                    "area": row[2] if len(row) > 2 else "",
+                    "total_after_discount": row[6] if len(row) > 6 else "",
+                    "downpayment": row[7] if len(row) > 7 else "",
+                    "status": row_status
                 })
         return all_units
     except:
@@ -193,7 +187,7 @@ def format_units(units, title=""):
             current_sheet = u["sheet"]
             result += f"*{current_sheet}:*\n"
         status_emoji = "✅" if u["status"] == "available" else "🔴" if u["status"] == "reserved" else "🔵"
-        result += f"• {u['code']} | {u['area']}م² | {u['total']} | {status_emoji}\n"
+        result += f"• {u['code']} | {u['area']}م² | {u['total_after_discount']} جنيه | {status_emoji}\n"
     return result
 
 def save_sale(project, unit, price, client_name):
@@ -282,7 +276,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "مرحباً بك في معمار دجلة!\n\n"
         "يمكنني مساعدتك في:\n"
-        "• تفاصيل وحدة بكودها\n"
+        "• تفاصيل وحدة بكودها (مثال: D11 B07)\n"
         "• الوحدات المتاحة والمحجوزة\n"
         "• إعلانات وسكريبتات احترافية\n"
         "• تسجيل المبيعات\n\n"
@@ -374,18 +368,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # البحث عن وحدة بكودها
     if unit_code:
-        unit = get_unit_from_av_sheet(unit_code, detected_project)
+        unit = get_unit_from_sheet(unit_code, detected_project)
         if unit:
             status_emoji = "✅" if unit["status"] == "available" else "🔴" if unit["status"] == "reserved" else "🔵"
             text = f"*تفاصيل الوحدة {unit['code']}*\n\n"
             text += f"🏢 المشروع: {unit['sheet']}\n"
             text += f"📐 المساحة: {unit['area']}م²\n"
-            text += f"💰 السعر: {unit['price']} جنيه للمتر\n"
-            text += f"💵 الإجمالي: {unit['total']} جنيه\n"
-            text += f"🏷️ النوع: {unit['type']}\n"
-            text += f"💳 طريقة الدفع: {unit['pp']}\n"
-            text += f"📅 تاريخ التسليم: {unit['ex_date'] if unit['ex_date'] else 'غير محدد'}\n"
-            text += f"👤 Team Leader: {unit['team_leader']}\n"
+            text += f"💰 سعر المتر: {unit['price_per_meter']} جنيه\n"
+            text += f"🏷️ الخصم: {unit['discount']} جنيه\n"
+            text += f"💵 السعر الأصلي: {unit['total_price']}\n"
+            text += f"✨ السعر بعد الخصم: {unit['total_after_discount']} جنيه\n"
+            text += f"🔑 المقدم: {unit['downpayment']} جنيه\n"
+            text += f"📅 القسط السنوي: {unit['batch_after_year']} جنيه\n"
+            text += f"💳 قيمة الأقساط: {unit['installments']} جنيه\n"
+            text += f"🏗️ دفعة التسليم: {unit['delivery_payment']} جنيه\n"
             text += f"📊 الحالة: {status_emoji} {unit['status']}"
             await update.message.reply_text(text, parse_mode="Markdown")
             return
@@ -410,11 +406,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             status_filter = "hold"
 
         if area_filter or status_filter or detected_project:
-            units = get_all_units(
-                project_filter=detected_project,
-                status_filter=status_filter,
-                area_filter=area_filter
-            )
+            units = get_all_units(project_filter=detected_project, status_filter=status_filter, area_filter=area_filter)
             title = "الوحدات"
             if status_filter:
                 title += f" {status_filter}"
