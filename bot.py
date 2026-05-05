@@ -40,8 +40,6 @@ client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
 user_context = {}
 chat_history = {}
-
-# Cache للـ headers
 sheet_headers_cache = {}
 
 def get_sheet_headers(ws):
@@ -53,26 +51,27 @@ def get_sheet_headers(ws):
     headers = {}
     for row in data[:3]:
         for i, cell in enumerate(row):
-            cell_lower = cell.strip().lower().replace(" ", "").replace("_", "")
-            if cell_lower in ["code", "u.", "unit"]:
+            c = cell.strip().lower().replace(" ", "").replace("_", "")
+            if c in ["code", "u."]:
                 headers["code"] = i
-            elif cell_lower in ["area"]:
+            elif c == "area":
                 headers["area"] = i
-            elif cell_lower in ["price", "pricepermeter", "pricepermt"]:
+            elif c in ["price", "pricepermeter"]:
                 headers["price"] = i
-            elif cell_lower in ["status"]:
+            elif c == "status":
                 headers["status"] = i
-            elif cell_lower in ["total", "totalprice", "totalpriceafterdicount", "totalpriceafterdiscount"]:
+            elif "totalpriceafterdi" in c or "totalpriceafterd" in c:
+                headers["total_after"] = i
+            elif c in ["totalprice", "total"]:
                 if "total_after" not in headers:
                     headers["total"] = i
-                headers["total_after"] = i
-            elif cell_lower in ["downpayment", "down", "downpay"]:
+            elif c in ["downpayment", "down"]:
                 headers["downpayment"] = i
-            elif cell_lower in ["instalments", "installments", "batchafteryear"]:
+            elif c in ["instalments", "installments", "batchafteryear"]:
                 headers["installments"] = i
-            elif cell_lower in ["cashdiscount", "discount"]:
+            elif c in ["cashdiscount", "discount"]:
                 headers["discount"] = i
-            elif cell_lower in ["deliverypayment", "delivery"]:
+            elif c in ["deliverypayment", "delivery"]:
                 headers["delivery"] = i
     sheet_headers_cache[ws.title] = headers
     return headers
@@ -86,7 +85,9 @@ def get_cell(row, headers, key, default=""):
 def get_status_from_row(row, headers):
     status_idx = headers.get("status")
     if status_idx is not None and status_idx < len(row):
-        return row[status_idx].strip().lower()
+        val = row[status_idx].strip().lower()
+        if val in ["available", "reserved", "hold"]:
+            return val
     for cell in row:
         if cell.strip().lower() in ["available", "reserved", "hold"]:
             return cell.strip().lower()
@@ -110,6 +111,20 @@ def extract_area(text):
             return int(match.group(1))
     return None
 
+def parse_project_unit(text):
+    """
+    يقرأ فورمات: PROJECT - UNIT CODE
+    مثال: WW1 - W1 C3 أو D11 - D11 B07
+    """
+    if "-" in text:
+        parts = text.split("-", 1)
+        project_part = parts[0].strip()
+        unit_part = parts[1].strip()
+        detected = detect_project(project_part)
+        if detected and unit_part:
+            return detected, unit_part.upper()
+    return None, None
+
 def detect_unit_code(text):
     text_upper = text.upper().strip()
     pattern1 = r'\b([A-Z]{1,4}\d{1,2}\s+[A-Z]{1,2}\d{1,3})\b'
@@ -122,10 +137,6 @@ def detect_unit_code(text):
         return match.group(1).strip()
     pattern3 = r'\b(\d{1,2}\s+[A-Z]\s+\d{1,2})\b'
     match = re.search(pattern3, text_upper)
-    if match:
-        return match.group(1).strip()
-    pattern4 = r'\b([A-Z]\d{1,3})\b'
-    match = re.search(pattern4, text_upper)
     if match:
         return match.group(1).strip()
     return None
@@ -160,7 +171,7 @@ def get_unit_from_sheet(unit_code, project_filter=None):
                         "status": get_status_from_row(row, headers)
                     }
         return None
-    except Exception as e:
+    except:
         return None
 
 def get_project_status(project_filter=None):
@@ -227,19 +238,19 @@ def format_unit_details(unit):
     text = f"*{unit['code']}* - {unit['sheet']}\n\n"
     if unit.get("area"):
         text += f"📐 المساحة: {unit['area']}م²\n"
-    if unit.get("price"):
+    if unit.get("price") and unit.get("price") not in ["available", "reserved", "hold"]:
         text += f"💰 سعر المتر: {unit['price']} جنيه\n"
-    if unit.get("discount"):
+    if unit.get("discount") and unit.get("discount") not in ["available", "reserved", "hold"]:
         text += f"🏷️ الخصم: {unit['discount']} جنيه\n"
     if unit.get("total"):
         text += f"💵 السعر: {unit['total']} جنيه\n"
     if unit.get("total_after") and unit.get("total_after") != unit.get("total"):
         text += f"✨ بعد الخصم: {unit['total_after']} جنيه\n"
-    if unit.get("downpayment"):
+    if unit.get("downpayment") and unit.get("downpayment") not in ["available", "reserved", "hold"]:
         text += f"🔑 المقدم: {unit['downpayment']}\n"
-    if unit.get("installments"):
+    if unit.get("installments") and unit.get("installments") not in ["available", "reserved", "hold"]:
         text += f"📅 الأقساط: {unit['installments']}\n"
-    if unit.get("delivery"):
+    if unit.get("delivery") and unit.get("delivery") not in ["available", "reserved", "hold"]:
         text += f"🏗️ دفعة التسليم: {unit['delivery']} جنيه\n"
     text += f"📊 الحالة: {status_emoji} {unit['status']}"
     return text
@@ -354,8 +365,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     chat_history[user_id] = []
     await update.message.reply_text(
-        "مرحباً! يمكنني مساعدتك في:\n"
-        "• تفاصيل وحدة (مثال: D11 B07)\n"
+        "مرحباً! يمكنني مساعدتك في:\n\n"
+        "• تفاصيل وحدة:\n  WW1 - W1 C3\n  D11 - D11 B07\n\n"
         "• الوحدات المتاحة والمحجوزة\n"
         "• إعلانات وسكريبتات\n"
         "• تسجيل المبيعات"
@@ -439,16 +450,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             pass
 
-    detected_project = detect_project(user_message)
-    area_filter = extract_area(user_message)
-    unit_code = detect_unit_code(user_message)
-
-    if unit_code:
+    # فورمات PROJECT - UNIT
+    detected_project, unit_code = parse_project_unit(user_message)
+    if detected_project and unit_code:
         unit = get_unit_from_sheet(unit_code, detected_project)
         if unit:
             text = format_unit_details(unit)
             await update.message.reply_text(text, parse_mode="Markdown")
-            return
+        else:
+            await update.message.reply_text(f"مش لاقي الوحدة {unit_code} في {detected_project}")
+        return
+
+    detected_project = detect_project(user_message)
+    area_filter = extract_area(user_message)
 
     keywords_all = ["كل المشاريع", "كل حاجه", "الكل", "جميع", "overview"]
     keywords_status = ["كام وحدة", "وحدات", "متاح", "reserved", "hold", "الوضع", "احصائيه", "احصائية", "كام", "إتاحة", "اتاحة", "اتاحه"]
@@ -518,6 +532,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 جميع الوحدات إدارية أو تجارية أو طبية.
 المشاريع: {", ".join(PROJECTS)}
 {f"معلومات {detected_project}:{chr(10)}{project_info}" if project_info else ""}
+للبحث عن وحدة استخدم: اسم المشروع - كود الوحدة
+مثال: WW1 - W1 C3
 أجب بشكل طبيعي ومختصر."""
 
     history = get_history(user_id)
