@@ -6,10 +6,13 @@ import gspread
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, MessageHandler, CommandHandler, CallbackQueryHandler, filters, ContextTypes
 
+# ── Constants ─────────────────────────────────────────────
 SHEET_ID = "1x5CfKVrgXZy1-1yVPoqAwcS0KpxeOyzxfA8shDt2qkw"
 AV_SHEET_ID = "1f-1lkgr7nGiQofoREnhfbszjaJFu17OtZaMJ09_sLWw"
 SECRET_PASSWORD = os.environ.get("SECRET_PASSWORD", "Adel2026")
+
 PROJECTS = ["D11 BUSINESS", "D12 Medical", "METRO +", "TIJAN", "WW1", "WW2", "STAGE X", "RESALE", "MIDST"]
+
 PROJECT_ALIASES = {
     "d11": "D11 BUSINESS", "d12": "D12 Medical",
     "ww1": "WW1", "ww2": "WW2", "tijan": "TIJAN",
@@ -17,6 +20,26 @@ PROJECT_ALIASES = {
     "resale": "RESALE", "metro": "METRO +",
 }
 
+# ── System Prompt (حطه هنا - ده اللي بيوفر التوكنز) ──────
+SYSTEM_PROMPT = """أنت مساعد مبيعات في شركة معمار دجلة للتطوير العقاري.
+
+الشركة:
+- كل المشاريع في العاشر من رمضان
+- كل الوحدات إدارية أو تجارية أو طبية - لا يوجد سكني
+- المشاريع: D11 BUSINESS, D12 Medical, METRO +, TIJAN, WW1, WW2, STAGE X, RESALE, MIDST
+
+قواعد صارمة:
+- كل المعلومات من الشيت فقط - لا تخترع أي أرقام أو تفاصيل
+- لو مش لاقي حاجة قول جملة واحدة بس
+- رد مختصر ومباشر بالعربي
+- حافظ على سياق المحادثة
+
+للبحث عن وحدة: PROJECT - UNIT CODE (مثال: WW1 - W1 C3)
+للميزانية: عميل مقدمه X ألف إجمالي من Y ل Z مليون
+للـ payment plan: payment plan WW1 - W1 C3 مقدم 20% على 5 سنين
+لما تخلص من وحدة: تمام"""
+
+# ── Setup ─────────────────────────────────────────────────
 creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
 gc = gspread.service_account_from_dict(creds_json)
 sh = gc.open_by_key(SHEET_ID)
@@ -28,6 +51,7 @@ chat_history = {}
 current_unit = {}
 headers_cache = {}
 
+# ── Helpers ───────────────────────────────────────────────
 def clean(s):
     try: return float(re.sub(r'[^\d.]', '', str(s)))
     except: return 0
@@ -97,6 +121,7 @@ def row_to_unit(row, ws_title, h):
         "status": get_status(row,h)
     }
 
+# ── Sheet Queries ─────────────────────────────────────────
 def find_unit(code, project=None):
     code = code.strip().upper().replace(" ","")
     for ws in av_sh.worksheets():
@@ -157,6 +182,7 @@ def get_sales():
         return "\n".join([f"• {r[0]}-{r[1]}-{r[2]}-{r[3]}-{r[4]}" for r in data[1:] if len(r)>=4])
     except: return "لا توجد مبيعات."
 
+# ── Formatters ────────────────────────────────────────────
 def fmt_unit(u):
     e = "✅" if u["status"]=="available" else "🔴" if u["status"]=="reserved" else "🔵"
     t = f"*{u['code']}* - {u['sheet']}\n"
@@ -213,20 +239,29 @@ STYLES = {
 def add_h(uid, role, content):
     if uid not in chat_history: chat_history[uid] = []
     chat_history[uid].append({"role":role,"content":content})
-    if len(chat_history[uid]) > 30: chat_history[uid] = chat_history[uid][-30:]
+    if len(chat_history[uid]) > 20: chat_history[uid] = chat_history[uid][-20:]
 
 def get_h(uid): return chat_history.get(uid, [])
 
+def ai(messages, system=None, max_tokens=400):
+    return client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=max_tokens,
+        system=system or SYSTEM_PROMPT,
+        messages=messages
+    ).content[0].text.strip()
+
+# ── Handlers ──────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.message.from_user.id
     chat_history[uid] = []
     current_unit.pop(uid, None)
     await update.message.reply_text(
         "مرحباً! مساعدك في معمار دجلة 🏢\n\n"
-        "• وحدة بكودها: WW1 - W1 C3\n"
+        "• وحدة: WW1 - W1 C3\n"
         "• ميزانية: عميل مقدمه 500 ألف إجمالي من 2 ل 2.5 مليون\n"
         "• Payment Plan: payment plan WW1 - W1 C3 مقدم 20% على 5 سنين\n"
-        "• لما تخلص قول: تمام"
+        "• لما تخلص: تمام"
     )
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -238,22 +273,19 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sname, sinst = STYLES[sk]
     u = current_unit.get(uid)
     unit_data = fmt_unit(u) if u else ""
-    res = client.messages.create(
-        model="claude-haiku-4-5-20251001", max_tokens=800,
-        system=f"""أنت خبير تسويق في معمار دجلة - العاشر من رمضان - وحدات إدارية وتجارية وطبية فقط.
-بيانات الوحدة من الشيت:
-{unit_data}
-الأسلوب: {sname} - {sinst}
-اكتب سكريبت واتساب مصري راقٍ بناءً على البيانات دي فقط.""",
-        messages=[{"role":"user","content":f"اكتب سكريبت {sname}"}]
+    reply = ai(
+        [{"role":"user","content":f"اكتب سكريبت {sname}"}],
+        system=f"{SYSTEM_PROMPT}\n\nبيانات الوحدة:\n{unit_data}\nالأسلوب: {sname} - {sinst}\nاكتب سكريبت واتساب مصري راقٍ بناءً على البيانات دي فقط.",
+        max_tokens=800
     )
-    await q.edit_message_text(f"*سكريبت {sname}*\n\n{res.content[0].text}", parse_mode="Markdown")
+    await q.edit_message_text(f"*سكريبت {sname}*\n\n{reply}", parse_mode="Markdown")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message.text.strip()
     uid = update.message.from_user.id
     ml = msg.lower()
 
+    # Password
     if user_context.get(uid, {}).get("waiting_password"):
         if msg == SECRET_PASSWORD:
             user_context[uid] = {"authenticated": True}
@@ -270,14 +302,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("أدخل كلمة المرور:")
         return
 
+    # تسجيل بيعة
     if "بيعة" in ml or "بعنا" in ml or "اتباع" in ml:
-        res = client.messages.create(
-            model="claude-haiku-4-5-20251001", max_tokens=200,
-            system='JSON فقط: {"action":"sale","project":"","unit":"","price":"","client":""}',
-            messages=[{"role":"user","content":msg}]
-        )
         try:
-            t = res.content[0].text.strip()
+            t = ai([{"role":"user","content":msg}],
+                   system='JSON فقط: {"action":"sale","project":"","unit":"","price":"","client":""}',
+                   max_tokens=200)
             d = json.loads(t[t.find("{"):t.rfind("}")+1])
             if d.get("action") == "sale":
                 save_sale(d["project"],d["unit"],d["price"],d["client"])
@@ -286,13 +316,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         except: pass
 
-    # تمام = مسح الوحدة
+    # تمام
     if ml.strip() in ["تمام","ok","okay","تم","موافق","next"]:
         current_unit.pop(uid, None)
         await update.message.reply_text("تمام! في وحدة أو عميل تاني؟")
         return
 
-    # سكريبت للوحدة الحالية أو وحدة محددة
+    # سكريبت
     if "سكريبت" in ml:
         p, uc = parse_pu(msg)
         if p and uc:
@@ -305,7 +335,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("ابعت الوحدة الأول، مثال: WW1 - W1 C3")
         return
 
-    # payment plan
+    # إعلان
+    if "اعلان" in ml or "إعلان" in ml:
+        u = current_unit.get(uid)
+        unit_data = f"\nبيانات الوحدة:\n{fmt_unit(u)}" if u else ""
+        reply = ai([{"role":"user","content":msg}],
+                   system=f"{SYSTEM_PROMPT}{unit_data}\nاكتب 3 صيغ إعلانية مصرية راقية بناءً على البيانات فقط.",
+                   max_tokens=1000)
+        await update.message.reply_text(reply)
+        return
+
+    # Payment Plan
     if "payment plan" in ml or "بلان" in ml or "خطة سداد" in ml:
         p, uc = parse_pu(msg)
         u = find_unit(uc, p) if p and uc else current_unit.get(uid)
@@ -319,7 +359,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 add_h(uid,"assistant",f"Payment Plan {u['code']}")
                 await update.message.reply_text(fmt_plan(u, plan), parse_mode="Markdown")
                 return
-        await update.message.reply_text("ابعت الوحدة الأول، مثال: payment plan WW1 - W1 C3 مقدم 20% على 5 سنين")
+        await update.message.reply_text("ابعت الوحدة، مثال: payment plan WW1 - W1 C3 مقدم 20% على 5 سنين")
         return
 
     # بحث بالكود
@@ -337,18 +377,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # بحث بالميزانية
     if any(k in ml for k in ["مقدم","ميزانية","إجمالي","اجمالي","مليون","ألف","الف"]) and any(c.isdigit() for c in msg):
-        res = client.messages.create(
-            model="claude-haiku-4-5-20251001", max_tokens=150,
-            system='JSON فقط: {"total_min":0,"total_max":0,"down_min":null,"down_max":null} - مليون=1000000 ألف=1000',
-            messages=[{"role":"user","content":msg}]
-        )
         try:
-            t = res.content[0].text.strip()
+            t = ai([{"role":"user","content":msg}],
+                   system='JSON فقط: {"total_min":0,"total_max":0,"down_min":null,"down_max":null} - مليون=1000000 ألف=1000',
+                   max_tokens=150)
             d = json.loads(t[t.find("{"):t.rfind("}")+1])
             tmin, tmax = d.get("total_min",0), d.get("total_max",0)
-            dmin, dmax = d.get("down_min"), d.get("down_max")
             if tmin > 0 and tmax > 0:
-                exact, close = search_budget(tmin, tmax, dmin, dmax)
+                exact, close = search_budget(tmin, tmax, d.get("down_min"), d.get("down_max"))
                 add_h(uid,"user",msg)
                 if exact:
                     out = f"✅ *{len(exact)} وحدة في النطاق:*\n\n" + "\n\n---\n\n".join([fmt_unit(u) for u in exact[:5]])
@@ -368,43 +404,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(fmt_stats(project_stats(dp)), parse_mode="Markdown")
         return
 
-    # إعلان
-    if "اعلان" in ml or "إعلان" in ml:
-        u = current_unit.get(uid)
-        unit_data = f"\nبيانات الوحدة:\n{fmt_unit(u)}" if u else ""
-        res = client.messages.create(
-            model="claude-haiku-4-5-20251001", max_tokens=1000,
-            system=f"أنت خبير تسويق في معمار دجلة - العاشر من رمضان - وحدات إدارية وتجارية وطبية.{unit_data}\nاكتب 3 صيغ إعلانية مصرية راقية بناءً على البيانات دي فقط.",
-            messages=[{"role":"user","content":msg}]
-        )
-        await update.message.reply_text(res.content[0].text)
-        return
-
-    # محادثة - بس لو في وحدة محفوظة
+    # محادثة ذكية
+    add_h(uid,"user",msg)
     u = current_unit.get(uid)
-    if u:
-        add_h(uid,"user",msg)
-        res = client.messages.create(
-            model="claude-haiku-4-5-20251001", max_tokens=400,
-            system=f"""أنت مساعد مبيعات في معمار دجلة.
-بيانات الوحدة الحالية من الشيت:
-{fmt_unit(u)}
-قواعد صارمة:
-- تكلم بس عن البيانات الموجودة فوق
-- لا تخترع أي معلومات إضافية
-- لو سألك عن حاجة مش في البيانات قول: "المعلومة دي مش في الشيت"
-- رد مختصر بالعربي""",
-            messages=get_h(uid)
-        )
-        reply = res.content[0].text.strip()
-        add_h(uid,"assistant",reply)
-        await update.message.reply_text(reply)
-    else:
-        await update.message.reply_text(
-            "ابعت كود الوحدة أو ميزانية العميل:\n"
-            "• وحدة: WW1 - W1 C3\n"
-            "• ميزانية: عميل مقدمه 500 ألف إجمالي من 2 ل 2.5 مليون"
-        )
+    unit_ctx = f"\nالوحدة الحالية:\n{fmt_unit(u)}\nتكلم بس عن البيانات دي." if u else ""
+    reply = ai(get_h(uid), system=SYSTEM_PROMPT + unit_ctx)
+    add_h(uid,"assistant",reply)
+    await update.message.reply_text(reply)
 
 def main():
     app = Application.builder().token(os.environ["TELEGRAM_TOKEN"]).build()
