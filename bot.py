@@ -72,18 +72,28 @@ def get_headers(ws):
     h = {}
     for row in (ws.get_all_values() or [])[:3]:
         for i, c in enumerate(row):
-            k = c.strip().lower().replace(" ","").replace("_","")
-            if k in ["code","u."]: h["code"]=i
-            elif k=="area": h["area"]=i
-            elif k in ["price","pricepermeter"]: h["price"]=i
-            elif k=="status": h["status"]=i
-            elif "totalpriceafterdi" in k: h["total_after"]=i
-            elif k in ["totalprice","total"]:
-                if "total_after" not in h: h["total"]=i
-            elif k in ["downpayment","down"]: h["down"]=i
-            elif k in ["instalments","installments","batchafteryear"]: h["inst"]=i
-            elif k in ["cashdiscount","discount"]: h["disc"]=i
-            elif k in ["deliverypayment","delivery"]: h["delivery"]=i
+            k = c.strip().lower().replace("_","")
+            kc = k.replace(" ","")
+            if kc in ["code","u."]:
+                h["code"] = i
+            elif kc == "area":
+                h["area"] = i
+            elif kc in ["price","pricepermeter"]:
+                h["price"] = i
+            elif kc == "status":
+                h["status"] = i
+            elif "totalpriceafterdi" in kc:
+                h["total_after"] = i
+            elif kc in ["totalprice","total"]:
+                if "total_after" not in h: h["total"] = i
+            elif "down" in kc and ("pay" in kc or kc == "down"):
+                h["down"] = i
+            elif kc in ["instalments","installments","batchafteryear","insta"]:
+                h["inst"] = i
+            elif kc in ["cashdiscount","discount"]:
+                h["disc"] = i
+            elif "delivery" in kc:
+                h["delivery"] = i
     headers_cache[ws.title] = h
     return h
 
@@ -114,6 +124,7 @@ def row_to_unit(row, ws_title, h):
         "down": down if down not in bad else "",
         "down_num": clean(down),
         "inst": gcell(row,h,"inst") if gcell(row,h,"inst") not in bad else "",
+        "delivery": gcell(row,h,"delivery") if gcell(row,h,"delivery") not in bad else "",
         "status": get_status(row,h)
     }
 
@@ -184,6 +195,7 @@ def fmt_unit(u):
     if u.get("price"): t += f"💰 سعر المتر: {u['price']} جنيه\n"
     if u.get("total"): t += f"💵 الإجمالي: {u['total']} جنيه\n"
     if u.get("down"): t += f"🔑 المقدم: {u['down']}\n"
+    if u.get("delivery"): t += f"🏗️ التسليم: {u['delivery']}\n"
     if u.get("inst"): t += f"📅 الأقساط: {u['inst']}\n"
     t += f"{e} {u['status']}"
     return t
