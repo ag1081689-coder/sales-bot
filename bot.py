@@ -32,9 +32,61 @@ chat_history = {}
 current_unit = {}
 headers_cache = {}
 
+NO_CONFIRMED_DATA = "مش لاقي بيانات مؤكدة في الشيت للطلب ده. ابعتلي كود الوحدة أو الميزانية بصيغة أوضح."
+
+BUDGET_WORDS = ["مقدم", "مقدمة", "مقدمه", "مقدمته", "ميزانية", "إجمالي", "اجمالي", "رينج", "range", "total", "budget", "down"]
+DATA_WORDS = BUDGET_WORDS + ["وحدة", "الوحدة", "كود", "مشروع", "المشروع", "اتاحة", "إتاحة", "اتاحه", "available", "availability", "سعر", "price", "area", "مساحة", "payment plan", "بلان", "خطة سداد"]
+
 def clean(s):
     try: return float(re.sub(r'[^\d.]', '', str(s)))
     except: return 0
+
+def amount_value(num, unit):
+    v = float(str(num).replace(",", "."))
+    unit = (unit or "").lower()
+    if unit in ["مليون", "ملايين", "million", "m"]:
+        return v * 1000000
+    if unit in ["ألف", "الف", "thousand", "k"]:
+        return v * 1000
+    return v
+
+def parse_budget(text):
+    t = text.lower().replace("|", " ")
+    amount = r'(\d+(?:[\.,]\d+)?)\s*(مليون|ملايين|ألف|الف|million|thousand|m|k)?'
+    total_min = total_max = down_min = down_max = None
+
+    total_range = re.search(r'(?:إجمالي|اجمالي|رينج|total|budget)?[^\d]{0,25}من\s*' + amount + r'\s*(?:ل|الى|إلى|-)\s*' + amount, t)
+    if total_range:
+        u1 = total_range.group(2) or total_range.group(4)
+        u2 = total_range.group(4) or total_range.group(2)
+        total_min = amount_value(total_range.group(1), u1)
+        total_max = amount_value(total_range.group(3), u2)
+
+    down_match = re.search(r'(?:مقدم|مقدمة|مقدمه|مقدمته|down)[^\d]{0,15}' + amount, t)
+    if down_match:
+        d = amount_value(down_match.group(1), down_match.group(2))
+        down_min = down_max = d
+
+    if total_min is None or total_max is None:
+        nums = re.findall(amount, t)
+        vals = [amount_value(n, u) for n, u in nums]
+        if len(vals) >= 2:
+            total_min, total_max = vals[-2], vals[-1]
+
+    if total_min and total_max and total_min > total_max:
+        total_min, total_max = total_max, total_min
+
+    if total_min and total_max:
+        return {"total_min": total_min, "total_max": total_max, "down_min": down_min, "down_max": down_max}
+    return None
+
+def is_budget_request(text):
+    ml = text.lower()
+    return any(k.lower() in ml for k in BUDGET_WORDS) and any(c.isdigit() for c in text)
+
+def is_data_request(text):
+    ml = text.lower()
+    return any(k.lower() in ml for k in DATA_WORDS) or detect_project(text) is not None
 
 def detect_project(text):
     t = text.lower()
@@ -324,7 +376,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("تمام! في وحدة أو عميل تاني؟")
         return
 
-    if "سكريبت" in ml:
+    if "سكريبت" in ml or "script" in ml:
         p, uc = parse_pu(msg)
         if p and uc:
             u = find_unit(uc, p)
@@ -358,7 +410,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 add_h(uid,"assistant","Payment Plan " + u["code"])
                 await update.message.reply_text(fmt_plan(u, plan), parse_mode="Markdown")
                 return
-        await update.message.reply_text("ابعت الوحدة، مثال: payment plan WW1 - W1 C3 مقدم 20% على 5 سنين")
+        await update.message.reply_text(NO_CONFIRMED_DATA)
         return
 
     p, uc = parse_pu(msg)
@@ -370,15 +422,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             add_h(uid,"assistant","تفاصيل " + u["code"])
             await update.message.reply_text(fmt_unit(u), parse_mode="Markdown")
         else:
-            await update.message.reply_text("مش لاقي " + uc + " في " + p)
+            await update.message.reply_text(NO_CONFIRMED_DATA)
         return
 
-    if any(k in ml for k in ["مقدم","ميزانية","إجمالي","اجمالي","مليون","ألف","الف"]) and any(c.isdigit() for c in msg):
+    if is_budget_request(msg):
         try:
-            t = ai([{"role":"user","content":msg}],
-                   system='JSON only: {"total_min":0,"total_max":0,"down_min":null,"down_max":null} million=1000000 thousand=1000',
-                   max_tokens=150)
-            d = json.loads(t[t.find("{"):t.rfind("}")+1])
+            d = parse_budget(msg)
+            if not d:
+                t = ai([{"role":"user","content":msg}],
+                       system='JSON only: {"total_min":0,"total_max":0,"down_min":null,"down_max":null} million=1000000 thousand=1000',
+                       max_tokens=150)
+                d = json.loads(t[t.find("{"):t.rfind("}")+1])
             tmin, tmax = d.get("total_min",0), d.get("total_max",0)
             if tmin > 0 and tmax > 0:
                 dp = detect_project(msg)
@@ -395,17 +449,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     add_h(uid,"assistant","وجدت " + str(len(exact)) + " وحدة")
                 elif close:
                     parts = [fmt_unit(u) for u in close[:15]]
-                    out = "مفيش بالظبط، بس في " + str(len(close)) + " قريبة (20%):\n\n" + "\n\n---\n\n".join(parts)
+                    out = "مفيش مطابق بالظبط، دي بدائل قريبة من الشيت في حدود 20%:\n\n" + "\n\n---\n\n".join(parts)
                     add_h(uid,"assistant","وجدت " + str(len(close)) + " قريبة")
                 else:
-                    out = "مفيش وحدات في النطاق ده. جرب توسع النطاق."
+                    out = NO_CONFIRMED_DATA
                 await update.message.reply_text(out, parse_mode="Markdown")
                 return
         except: pass
+        await update.message.reply_text(NO_CONFIRMED_DATA)
+        return
 
     dp = detect_project(msg)
     if any(k in ml for k in ["كام وحدة","كل المشاريع","جميع","إتاحة","اتاحه","احصائيه"]):
-        await update.message.reply_text(fmt_stats(project_stats(dp)), parse_mode="Markdown")
+        stats = project_stats(dp)
+        await update.message.reply_text(fmt_stats(stats) if stats else NO_CONFIRMED_DATA, parse_mode="Markdown")
         return
 
     add_h(uid,"user",msg)
@@ -420,6 +477,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(out, parse_mode="Markdown")
             add_h(uid,"assistant","وحدات " + dp)
             return
+
+    if is_data_request(msg):
+        if dp:
+            stats = project_stats(dp)
+            if stats:
+                await update.message.reply_text(fmt_stats(stats), parse_mode="Markdown")
+                return
+        await update.message.reply_text(NO_CONFIRMED_DATA)
+        return
 
     unit_ctx = "\nالوحدة الحالية:\n" + fmt_unit(u) + "\nتكلم بس عن البيانات دي." if u else ""
     budget_ctx = "\nنتائج البحث: " + str(len(ctx.get("results",[]))) + " وحدة." if ctx.get("results") else ""
