@@ -2,14 +2,14 @@ import os
 import json
 import re
 import logging
-import anthropic
+from openai import OpenAI
 import gspread
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, MessageHandler, CommandHandler, CallbackQueryHandler, filters, ContextTypes
 
 SHEET_ID = "1x5CfKVrgXZy1-1yVPoqAwcS0KpxeOyzxfA8shDt2qkw"
 AV_SHEET_ID = "1f-1lkgr7nGiQofoREnhfbszjaJFu17OtZaMJ09_sLWw"
-REQUIRED_ENV_VARS = ["GOOGLE_CREDENTIALS", "ANTHROPIC_API_KEY", "TELEGRAM_TOKEN", "SECRET_PASSWORD"]
+REQUIRED_ENV_VARS = ["GOOGLE_CREDENTIALS", "OPENAI_API_KEY", "TELEGRAM_TOKEN", "SECRET_PASSWORD"]
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -43,7 +43,7 @@ creds_json = json.loads(require_env("GOOGLE_CREDENTIALS"))
 gc = gspread.service_account_from_dict(creds_json)
 sh = gc.open_by_key(SHEET_ID)
 av_sh = gc.open_by_key(AV_SHEET_ID)
-client = anthropic.Anthropic(api_key=require_env("ANTHROPIC_API_KEY"))
+client = OpenAI(api_key=require_env("OPENAI_API_KEY"))
 
 user_context = {}
 chat_history = {}
@@ -252,12 +252,13 @@ def add_h(uid, role, content):
 def get_h(uid): return chat_history.get(uid, [])
 
 def ai(messages, system=None, max_tokens=400):
-    return client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=max_tokens,
-        system=system or SYSTEM_PROMPT,
-        messages=messages
-    ).content[0].text.strip()
+    response = client.responses.create(
+        model="gpt-5.2",
+        max_output_tokens=max_tokens,
+        instructions=system or SYSTEM_PROMPT,
+        input=messages
+    )
+    return response.output_text.strip()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.message.from_user.id
