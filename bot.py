@@ -3,7 +3,7 @@ import json
 import re
 import anthropic
 import gspread
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import Application, MessageHandler, CommandHandler, CallbackQueryHandler, filters, ContextTypes
 
 SHEET_ID = "1x5CfKVrgXZy1-1yVPoqAwcS0KpxeOyzxfA8shDt2qkw"
@@ -32,9 +32,101 @@ chat_history = {}
 current_unit = {}
 headers_cache = {}
 
+NO_CONFIRMED_DATA = "مش لاقي بيانات مؤكدة في الشيت للطلب ده. ابعتلي كود الوحدة أو الميزانية بصيغة أوضح."
+
+BUDGET_WORDS = ["مقدم", "مقدمة", "مقدمه", "مقدمته", "ميزانية", "إجمالي", "اجمالي", "رينج", "range", "total", "budget", "down"]
+DATA_WORDS = BUDGET_WORDS + ["وحدة", "الوحدة", "كود", "مشروع", "المشروع", "اتاحة", "إتاحة", "اتاحه", "available", "availability", "سعر", "price", "area", "مساحة", "payment plan", "بلان", "خطة سداد", "قسط", "اقساط", "أقساط", "تسليم", "delivery"]
+CHEAP_WORDS = ["الأرخص", "ارخص", "أرخص", "اقل سعر", "أقل سعر", "cheapest"]
+
 def clean(s):
     try: return float(re.sub(r'[^\d.]', '', str(s)))
     except: return 0
+
+def amount_value(num, unit):
+    v = float(str(num).replace(",", "."))
+    unit = (unit or "").lower()
+    if unit in ["مليون", "ملايين", "million", "m"]:
+        return v * 1000000
+    if unit in ["ألف", "الف", "thousand", "k"]:
+        return v * 1000
+    return v
+
+def parse_budget(text):
+    t = text.lower().replace("|", " ")
+    amount = r'(\d+(?:[\.,]\d+)?)\s*(مليون|ملايين|ألف|الف|million|thousand|m|k)?'
+    total_min = total_max = down_min = down_max = None
+
+    total_range = re.search(r'(?:إجمالي|اجمالي|رينج|total|budget)?[^\d]{0,25}من\s*' + amount + r'\s*(?:ل|الى|إلى|-)\s*' + amount, t)
+    if not total_range:
+        total_range = re.search(r'(?:إجمالي|اجمالي|رينج|total|budget)[^\d]{0,15}' + amount + r'\s*-\s*' + amount, t)
+    if total_range:
+        u1 = total_range.group(2) or total_range.group(4)
+        u2 = total_range.group(4) or total_range.group(2)
+        total_min = amount_value(total_range.group(1), u1)
+        total_max = amount_value(total_range.group(3), u2)
+
+    down_match = re.search(r'(?:مقدم|مقدمة|مقدمه|مقدمته|down)[^\d]{0,15}' + amount, t)
+    if down_match:
+        d = amount_value(down_match.group(1), down_match.group(2))
+        down_min = down_max = d
+
+    if total_min is None or total_max is None:
+        total_part = re.search(r'(?:إجمالي|اجمالي|رينج|total|budget)(.*)', t)
+        source = total_part.group(1) if total_part else t
+        nums = re.findall(amount, source)
+        vals = [amount_value(n, u) for n, u in nums]
+        if len(vals) >= 2:
+            if nums[-1][1] and not nums[-2][1]:
+                vals[-2] = amount_value(nums[-2][0], nums[-1][1])
+            total_min, total_max = vals[-2], vals[-1]
+
+    if total_min and total_max and total_min > total_max:
+        total_min, total_max = total_max, total_min
+
+    if total_min and total_max:
+        return {"total_min": total_min, "total_max": total_max, "down_min": down_min, "down_max": down_max}
+    return None
+
+def is_budget_request(text):
+    ml = text.lower()
+    return any(k.lower() in ml for k in BUDGET_WORDS) and any(c.isdigit() for c in text)
+
+def is_data_request(text):
+    ml = text.lower()
+    return any(k.lower() in ml for k in DATA_WORDS) or detect_project(text) is not None
+
+def ensure_context(uid):
+    if uid not in user_context:
+        user_context[uid] = {}
+    return user_context[uid]
+
+def remember_project(uid, project):
+    if project:
+        ensure_context(uid)["last_project"] = project
+
+def remember_unit(uid, unit):
+    if unit:
+        current_unit[uid] = unit
+        ctx = ensure_context(uid)
+        ctx["last_unit"] = unit
+        ctx["last_project"] = unit.get("sheet")
+
+def remember_results(uid, results, is_close=False, budget=None):
+    ctx = ensure_context(uid)
+    ctx["results"] = results
+    ctx["last_results"] = results
+    ctx["is_close"] = is_close
+    if budget:
+        ctx["budget"] = budget
+    if results:
+        remember_unit(uid, min(results, key=lambda x: x.get("total_num") or 0))
+
+def has_confirmed_context(uid):
+    ctx = user_context.get(uid, {})
+    return bool(current_unit.get(uid) or ctx.get("results") or ctx.get("last_results"))
+
+def fmt_units_list(units, title):
+    return title + "\n\n" + "\n\n---\n\n".join([fmt_unit(u) for u in units])
 
 def detect_project(text):
     t = text.lower()
@@ -225,6 +317,24 @@ def add_h(uid, role, content):
 
 def get_h(uid): return chat_history.get(uid, [])
 
+def sales_menu():
+    return ReplyKeyboardMarkup([
+        ["تفاصيل وحدة", "بحث بالميزانية"],
+        ["Payment Plan", "سكريبت واتساب"],
+        ["كتابة إعلان", "إحصائيات المشاريع"],
+        ["تسجيل بيعة"]
+    ], resize_keyboard=True)
+
+MENU_INSTRUCTIONS = {
+    "تفاصيل وحدة": "ابعت اسم المشروع وكود الوحدة بالشكل ده:\nWW1 - W1 C3",
+    "بحث بالميزانية": "اكتب ميزانية العميل بالشكل ده:\nعميل مقدمه 500 ألف إجمالي من 2 ل 2.5 مليون",
+    "Payment Plan": "اكتب طلب خطة السداد بالشكل ده:\npayment plan WW1 - W1 C3 مقدم 20% على 5 سنين",
+    "سكريبت واتساب": "ابعت الوحدة مع كلمة سكريبت، مثال:\nسكريبت WW1 - W1 C3",
+    "كتابة إعلان": "ابعت الوحدة الأول، وبعدها اكتب: اعلان\nمثال:\nWW1 - W1 C3\nوبعدها:\nاعلان",
+    "إحصائيات المشاريع": "اكتب اسم المشروع أو اطلب كل الإحصائيات، مثال:\nكام وحدة في WW1\nأو:\nإحصائيات المشاريع",
+    "تسجيل بيعة": "اكتب تفاصيل البيعة في رسالة واحدة، مثال:\nبعنا WW1 - W1 C3 بسعر 2500000 للعميل أحمد"
+}
+
 def ai(messages, system=None, max_tokens=400):
     return client.messages.create(
         model="claude-haiku-4-5-20251001",
@@ -239,11 +349,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     current_unit.pop(uid, None)
     user_context.pop(uid, None)
     await update.message.reply_text(
-        "مرحباً! مساعدك في معمار دجلة\n\n"
-        "وحدة: WW1 - W1 C3\n"
-        "ميزانية: عميل مقدمه 500 ألف إجمالي من 2 ل 2.5 مليون\n"
-        "Payment Plan: payment plan WW1 - W1 C3 مقدم 20% على 5 سنين\n"
-        "لما تخلص: تمام"
+        "أهلاً بيك 👋\n"
+        "أنا مساعد فريق المبيعات في معمار دجلة.\n"
+        "أقدر أساعدك تجيب تفاصيل وحدة، تدور بميزانية العميل، تحسب Payment Plan، تكتب سكريبت واتساب أو إعلان، وتشوف إحصائيات المشاريع.\n\n"
+        "اختار من الأزرار تحت أو ابعت طلبك مباشرة.",
+        reply_markup=sales_menu()
     )
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -254,10 +364,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if sk not in STYLES: return
     sname, sinst = STYLES[sk]
     u = current_unit.get(uid)
-    unit_data = fmt_unit(u) if u else ""
+    if not u:
+        await q.edit_message_text(NO_CONFIRMED_DATA)
+        return
+    unit_data = fmt_unit(u)
     reply = ai(
         [{"role":"user","content":"write script " + sname}],
-        system=SYSTEM_PROMPT + " unit data: " + unit_data + " style: " + sname + " - " + sinst + " write whatsapp script in egyptian arabic based on unit data only.",
+        system=SYSTEM_PROMPT + " unit data: " + unit_data + " style: " + sname + " - " + sinst + " write a short whatsapp script in egyptian arabic based on confirmed unit data only. Never add client names, prices, areas, cities, payment terms, or currency not shown in unit data.",
         max_tokens=800
     )
     await q.edit_message_text("*script " + sname + "*\n\n" + reply, parse_mode="Markdown")
@@ -266,6 +379,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message.text.strip()
     uid = update.message.from_user.id
     ml = msg.lower()
+
+    if msg in MENU_INSTRUCTIONS:
+        await update.message.reply_text(MENU_INSTRUCTIONS[msg], reply_markup=sales_menu())
+        return
 
     if user_context.get(uid, {}).get("waiting_password"):
         if msg == SECRET_PASSWORD:
@@ -302,7 +419,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("تمام! في وحدة أو عميل تاني؟")
         return
 
-    if "سكريبت" in ml:
+    if "سكريبت" in ml or "script" in ml:
         p, uc = parse_pu(msg)
         if p and uc:
             u = find_unit(uc, p)
@@ -311,14 +428,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if u:
             await update.message.reply_text("اختر الأسلوب:", reply_markup=style_buttons())
         else:
-            await update.message.reply_text("ابعت الوحدة الأول، مثال: WW1 - W1 C3")
+            await update.message.reply_text(NO_CONFIRMED_DATA)
         return
 
     if "اعلان" in ml or "إعلان" in ml:
         u = current_unit.get(uid)
-        unit_data = fmt_unit(u) if u else ""
+        if not u:
+            await update.message.reply_text(NO_CONFIRMED_DATA)
+            return
+        unit_data = fmt_unit(u)
         reply = ai([{"role":"user","content":msg}],
-                   system=SYSTEM_PROMPT + " unit: " + unit_data + " write 3 ad variants in egyptian arabic based on data only.",
+                   system=SYSTEM_PROMPT + " unit: " + unit_data + " write 3 short ad variants in egyptian arabic based on this confirmed unit data only. Never add prices, areas, cities, payment terms, or client data not shown in unit data.",
                    max_tokens=1000)
         await update.message.reply_text(reply)
         return
@@ -327,7 +447,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         p, uc = parse_pu(msg)
         u = find_unit(uc, p) if p and uc else current_unit.get(uid)
         if u:
-            current_unit[uid] = u
+            remember_unit(uid, u)
             dp_m = re.search(r'(\d+)\s*%', msg)
             yr_m = re.search(r'(\d+)\s*سن', msg)
             plan = calc_plan(u["total"], int(dp_m.group(1)) if dp_m else 20, int(yr_m.group(1)) if yr_m else 5)
@@ -336,73 +456,100 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 add_h(uid,"assistant","Payment Plan " + u["code"])
                 await update.message.reply_text(fmt_plan(u, plan), parse_mode="Markdown")
                 return
-        await update.message.reply_text("ابعت الوحدة، مثال: payment plan WW1 - W1 C3 مقدم 20% على 5 سنين")
+        await update.message.reply_text(NO_CONFIRMED_DATA)
         return
 
     p, uc = parse_pu(msg)
     if p and uc:
         u = find_unit(uc, p)
         if u:
-            current_unit[uid] = u
+            remember_unit(uid, u)
             add_h(uid,"user",msg)
             add_h(uid,"assistant","تفاصيل " + u["code"])
             await update.message.reply_text(fmt_unit(u), parse_mode="Markdown")
         else:
-            await update.message.reply_text("مش لاقي " + uc + " في " + p)
+            await update.message.reply_text(NO_CONFIRMED_DATA)
         return
 
-    if any(k in ml for k in ["مقدم","ميزانية","إجمالي","اجمالي","مليون","ألف","الف"]) and any(c.isdigit() for c in msg):
+    if is_budget_request(msg):
         try:
-            t = ai([{"role":"user","content":msg}],
-                   system='JSON only: {"total_min":0,"total_max":0,"down_min":null,"down_max":null} million=1000000 thousand=1000',
-                   max_tokens=150)
-            d = json.loads(t[t.find("{"):t.rfind("}")+1])
+            d = parse_budget(msg)
+            if not d:
+                await update.message.reply_text(NO_CONFIRMED_DATA)
+                return
             tmin, tmax = d.get("total_min",0), d.get("total_max",0)
             if tmin > 0 and tmax > 0:
                 dp = detect_project(msg)
                 exact, close = search_budget(tmin, tmax, d.get("down_min"), d.get("down_max"), dp)
                 add_h(uid,"user",msg)
-                user_context[uid] = {
-                    "budget": {"tmin":tmin,"tmax":tmax},
-                    "results": exact or close,
-                    "is_close": len(exact)==0
-                }
+                remember_project(uid, dp)
+                remember_results(uid, exact or close, len(exact)==0, {"tmin":tmin,"tmax":tmax})
                 if exact:
                     parts = [fmt_unit(u) for u in exact[:15]]
                     out = "✅ *" + str(len(exact)) + " وحدة في النطاق:*\n\n" + "\n\n---\n\n".join(parts)
                     add_h(uid,"assistant","وجدت " + str(len(exact)) + " وحدة")
                 elif close:
                     parts = [fmt_unit(u) for u in close[:15]]
-                    out = "مفيش بالظبط، بس في " + str(len(close)) + " قريبة (20%):\n\n" + "\n\n---\n\n".join(parts)
+                    out = "مفيش مطابق بالظبط، بس دي أقرب بدائل في حدود 20%.\n\n" + "\n\n---\n\n".join(parts)
                     add_h(uid,"assistant","وجدت " + str(len(close)) + " قريبة")
                 else:
-                    out = "مفيش وحدات في النطاق ده. جرب توسع النطاق."
+                    out = NO_CONFIRMED_DATA
                 await update.message.reply_text(out, parse_mode="Markdown")
                 return
         except: pass
+        await update.message.reply_text(NO_CONFIRMED_DATA)
+        return
 
     dp = detect_project(msg)
     if any(k in ml for k in ["كام وحدة","كل المشاريع","جميع","إتاحة","اتاحه","احصائيه"]):
-        await update.message.reply_text(fmt_stats(project_stats(dp)), parse_mode="Markdown")
+        stats = project_stats(dp)
+        await update.message.reply_text(fmt_stats(stats) if stats else NO_CONFIRMED_DATA, parse_mode="Markdown")
         return
 
     add_h(uid,"user",msg)
     u = current_unit.get(uid)
     ctx = user_context.get(uid, {})
 
+    if any(k in ml for k in CHEAP_WORDS):
+        results = ctx.get("results") or ctx.get("last_results") or []
+        if results:
+            cheapest = sorted(results, key=lambda x: x.get("total_num") or 0)[:5]
+            remember_results(uid, cheapest, ctx.get("is_close", False), ctx.get("budget"))
+            await update.message.reply_text(fmt_units_list(cheapest, "دي أرخص اختيارات مؤكدة من الشيت:"), parse_mode="Markdown")
+        else:
+            await update.message.reply_text(NO_CONFIRMED_DATA)
+        return
+
     if ctx.get("results") and dp:
         filtered = [x for x in ctx["results"] if dp.lower() in x["sheet"].lower()]
         if filtered:
             parts = [fmt_unit(x) for x in filtered[:5]]
             out = "الوحدات في " + dp + ":\n\n" + "\n\n---\n\n".join(parts)
+            remember_project(uid, dp)
+            remember_results(uid, filtered, ctx.get("is_close", False), ctx.get("budget"))
             await update.message.reply_text(out, parse_mode="Markdown")
             add_h(uid,"assistant","وحدات " + dp)
             return
 
-    unit_ctx = "\nالوحدة الحالية:\n" + fmt_unit(u) + "\nتكلم بس عن البيانات دي." if u else ""
-    budget_ctx = "\nنتائج البحث: " + str(len(ctx.get("results",[]))) + " وحدة." if ctx.get("results") else ""
+    if is_data_request(msg):
+        if dp:
+            stats = project_stats(dp)
+            if stats:
+                await update.message.reply_text(fmt_stats(stats), parse_mode="Markdown")
+                return
+        await update.message.reply_text(NO_CONFIRMED_DATA)
+        return
 
-    reply = ai(get_h(uid), system=SYSTEM_PROMPT + unit_ctx + budget_ctx)
+    if not has_confirmed_context(uid):
+        await update.message.reply_text(NO_CONFIRMED_DATA)
+        return
+
+    u = current_unit.get(uid)
+    ctx = user_context.get(uid, {})
+    unit_ctx = "\nالوحدة الحالية المؤكدة من الشيت:\n" + fmt_unit(u) if u else ""
+    results_ctx = "\nنتائج مؤكدة من الشيت: " + str(len(ctx.get("results",[]))) + " وحدة." if ctx.get("results") else ""
+
+    reply = ai(get_h(uid), system=SYSTEM_PROMPT + unit_ctx + results_ctx + " رد قصير بالمصري. استخدم البيانات المؤكدة دي فقط. ممنوع تخترع أي أسماء عملاء أو أسعار أو مساحات أو مدن أو شروط دفع أو عملات أو فورم.")
     add_h(uid,"assistant",reply)
     await update.message.reply_text(reply)
 
