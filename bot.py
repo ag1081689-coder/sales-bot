@@ -35,7 +35,8 @@ headers_cache = {}
 NO_CONFIRMED_DATA = "مش لاقي بيانات مؤكدة في الشيت للطلب ده. ابعتلي كود الوحدة أو الميزانية بصيغة أوضح."
 
 BUDGET_WORDS = ["مقدم", "مقدمة", "مقدمه", "مقدمته", "ميزانية", "إجمالي", "اجمالي", "رينج", "range", "total", "budget", "down"]
-DATA_WORDS = BUDGET_WORDS + ["وحدة", "الوحدة", "كود", "مشروع", "المشروع", "اتاحة", "إتاحة", "اتاحه", "available", "availability", "سعر", "price", "area", "مساحة", "payment plan", "بلان", "خطة سداد"]
+DATA_WORDS = BUDGET_WORDS + ["وحدة", "الوحدة", "كود", "مشروع", "المشروع", "اتاحة", "إتاحة", "اتاحه", "available", "availability", "سعر", "price", "area", "مساحة", "payment plan", "بلان", "خطة سداد", "قسط", "اقساط", "أقساط", "تسليم", "delivery"]
+CHEAP_WORDS = ["الأرخص", "ارخص", "أرخص", "اقل سعر", "أقل سعر", "cheapest"]
 
 def clean(s):
     try: return float(re.sub(r'[^\d.]', '', str(s)))
@@ -68,6 +69,13 @@ def parse_budget(text):
         down_min = down_max = d
 
     if total_min is None or total_max is None:
+        total_part = re.search(r'(?:إجمالي|اجمالي|رينج|total|budget)(.*)', t)
+        source = total_part.group(1) if total_part else t
+        nums = re.findall(amount, source)
+        vals = [amount_value(n, u) for n, u in nums]
+        if len(vals) >= 2:
+            if nums[-1][1] and not nums[-2][1]:
+                vals[-2] = amount_value(nums[-2][0], nums[-1][1])
         nums = re.findall(amount, t)
         vals = [amount_value(n, u) for n, u in nums]
         if len(vals) >= 2:
@@ -324,10 +332,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if sk not in STYLES: return
     sname, sinst = STYLES[sk]
     u = current_unit.get(uid)
-    unit_data = fmt_unit(u) if u else ""
+    if not u:
+        await q.edit_message_text(NO_CONFIRMED_DATA)
+        return
+    unit_data = fmt_unit(u)
     reply = ai(
         [{"role":"user","content":"write script " + sname}],
-        system=SYSTEM_PROMPT + " unit data: " + unit_data + " style: " + sname + " - " + sinst + " write whatsapp script in egyptian arabic based on unit data only.",
+        system=SYSTEM_PROMPT + " unit data: " + unit_data + " style: " + sname + " - " + sinst + " write a short whatsapp script in egyptian arabic based on confirmed unit data only. Never add client names, prices, areas, cities, payment terms, or currency not shown in unit data.",
         max_tokens=800
     )
     await q.edit_message_text("*script " + sname + "*\n\n" + reply, parse_mode="Markdown")
@@ -385,14 +396,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if u:
             await update.message.reply_text("اختر الأسلوب:", reply_markup=style_buttons())
         else:
-            await update.message.reply_text("ابعت الوحدة الأول، مثال: WW1 - W1 C3")
+            await update.message.reply_text(NO_CONFIRMED_DATA)
         return
 
     if "اعلان" in ml or "إعلان" in ml:
         u = current_unit.get(uid)
-        unit_data = fmt_unit(u) if u else ""
+        if not u:
+            await update.message.reply_text(NO_CONFIRMED_DATA)
+            return
+        unit_data = fmt_unit(u)
         reply = ai([{"role":"user","content":msg}],
-                   system=SYSTEM_PROMPT + " unit: " + unit_data + " write 3 ad variants in egyptian arabic based on data only.",
+                   system=SYSTEM_PROMPT + " unit: " + unit_data + " write 3 short ad variants in egyptian arabic based on this confirmed unit data only. Never add prices, areas, cities, payment terms, or client data not shown in unit data.",
                    max_tokens=1000)
         await update.message.reply_text(reply)
         return
@@ -401,7 +415,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         p, uc = parse_pu(msg)
         u = find_unit(uc, p) if p and uc else current_unit.get(uid)
         if u:
-            current_unit[uid] = u
+            remember_unit(uid, u)
             dp_m = re.search(r'(\d+)\s*%', msg)
             yr_m = re.search(r'(\d+)\s*سن', msg)
             plan = calc_plan(u["total"], int(dp_m.group(1)) if dp_m else 20, int(yr_m.group(1)) if yr_m else 5)
@@ -417,7 +431,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if p and uc:
         u = find_unit(uc, p)
         if u:
-            current_unit[uid] = u
+            remember_unit(uid, u)
             add_h(uid,"user",msg)
             add_h(uid,"assistant","تفاصيل " + u["code"])
             await update.message.reply_text(fmt_unit(u), parse_mode="Markdown")
@@ -438,17 +452,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 dp = detect_project(msg)
                 exact, close = search_budget(tmin, tmax, d.get("down_min"), d.get("down_max"), dp)
                 add_h(uid,"user",msg)
-                user_context[uid] = {
-                    "budget": {"tmin":tmin,"tmax":tmax},
-                    "results": exact or close,
-                    "is_close": len(exact)==0
-                }
+                remember_project(uid, dp)
+                remember_results(uid, exact or close, len(exact)==0, {"tmin":tmin,"tmax":tmax})
                 if exact:
                     parts = [fmt_unit(u) for u in exact[:15]]
                     out = "✅ *" + str(len(exact)) + " وحدة في النطاق:*\n\n" + "\n\n---\n\n".join(parts)
                     add_h(uid,"assistant","وجدت " + str(len(exact)) + " وحدة")
                 elif close:
                     parts = [fmt_unit(u) for u in close[:15]]
+                    out = "مفيش مطابق بالظبط، بس دي أقرب بدائل في حدود 20%.\n\n" + "\n\n---\n\n".join(parts)
                     out = "مفيش مطابق بالظبط، دي بدائل قريبة من الشيت في حدود 20%:\n\n" + "\n\n---\n\n".join(parts)
                     add_h(uid,"assistant","وجدت " + str(len(close)) + " قريبة")
                 else:
@@ -469,11 +481,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = current_unit.get(uid)
     ctx = user_context.get(uid, {})
 
+    if any(k in ml for k in CHEAP_WORDS):
+        results = ctx.get("results") or ctx.get("last_results") or []
+        if results:
+            cheapest = sorted(results, key=lambda x: x.get("total_num") or 0)[:5]
+            remember_results(uid, cheapest, ctx.get("is_close", False), ctx.get("budget"))
+            await update.message.reply_text(fmt_units_list(cheapest, "دي أرخص اختيارات مؤكدة من الشيت:"), parse_mode="Markdown")
+        else:
+            await update.message.reply_text(NO_CONFIRMED_DATA)
+        return
+
     if ctx.get("results") and dp:
         filtered = [x for x in ctx["results"] if dp.lower() in x["sheet"].lower()]
         if filtered:
             parts = [fmt_unit(x) for x in filtered[:5]]
             out = "الوحدات في " + dp + ":\n\n" + "\n\n---\n\n".join(parts)
+            remember_project(uid, dp)
+            remember_results(uid, filtered, ctx.get("is_close", False), ctx.get("budget"))
             await update.message.reply_text(out, parse_mode="Markdown")
             add_h(uid,"assistant","وحدات " + dp)
             return
@@ -487,10 +511,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(NO_CONFIRMED_DATA)
         return
 
-    unit_ctx = "\nالوحدة الحالية:\n" + fmt_unit(u) + "\nتكلم بس عن البيانات دي." if u else ""
-    budget_ctx = "\nنتائج البحث: " + str(len(ctx.get("results",[]))) + " وحدة." if ctx.get("results") else ""
+    if not has_confirmed_context(uid):
+        await update.message.reply_text(NO_CONFIRMED_DATA)
+        return
 
-    reply = ai(get_h(uid), system=SYSTEM_PROMPT + unit_ctx + budget_ctx)
+    u = current_unit.get(uid)
+    ctx = user_context.get(uid, {})
+    unit_ctx = "\nالوحدة الحالية المؤكدة من الشيت:\n" + fmt_unit(u) if u else ""
+    results_ctx = "\nنتائج مؤكدة من الشيت: " + str(len(ctx.get("results",[]))) + " وحدة." if ctx.get("results") else ""
+
+    reply = ai(get_h(uid), system=SYSTEM_PROMPT + unit_ctx + results_ctx + " رد قصير بالمصري. استخدم البيانات المؤكدة دي فقط. ممنوع تخترع أي أسماء عملاء أو أسعار أو مساحات أو مدن أو شروط دفع أو عملات أو فورم.")
     add_h(uid,"assistant",reply)
     await update.message.reply_text(reply)
 
