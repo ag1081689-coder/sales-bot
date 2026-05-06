@@ -3,7 +3,7 @@ import json
 import re
 import anthropic
 import gspread
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import Application, MessageHandler, CommandHandler, CallbackQueryHandler, filters, ContextTypes
 
 SHEET_ID = "1x5CfKVrgXZy1-1yVPoqAwcS0KpxeOyzxfA8shDt2qkw"
@@ -225,6 +225,24 @@ def add_h(uid, role, content):
 
 def get_h(uid): return chat_history.get(uid, [])
 
+def sales_menu():
+    return ReplyKeyboardMarkup([
+        ["تفاصيل وحدة", "بحث بالميزانية"],
+        ["Payment Plan", "سكريبت واتساب"],
+        ["كتابة إعلان", "إحصائيات المشاريع"],
+        ["تسجيل بيعة"]
+    ], resize_keyboard=True)
+
+MENU_INSTRUCTIONS = {
+    "تفاصيل وحدة": "ابعت اسم المشروع وكود الوحدة بالشكل ده:\nWW1 - W1 C3",
+    "بحث بالميزانية": "اكتب ميزانية العميل بالشكل ده:\nعميل مقدمه 500 ألف إجمالي من 2 ل 2.5 مليون",
+    "Payment Plan": "اكتب طلب خطة السداد بالشكل ده:\npayment plan WW1 - W1 C3 مقدم 20% على 5 سنين",
+    "سكريبت واتساب": "ابعت الوحدة مع كلمة سكريبت، مثال:\nسكريبت WW1 - W1 C3",
+    "كتابة إعلان": "ابعت الوحدة الأول، وبعدها اكتب: اعلان\nمثال:\nWW1 - W1 C3\nوبعدها:\nاعلان",
+    "إحصائيات المشاريع": "اكتب اسم المشروع أو اطلب كل الإحصائيات، مثال:\nكام وحدة في WW1\nأو:\nإحصائيات المشاريع",
+    "تسجيل بيعة": "اكتب تفاصيل البيعة في رسالة واحدة، مثال:\nبعنا WW1 - W1 C3 بسعر 2500000 للعميل أحمد"
+}
+
 def ai(messages, system=None, max_tokens=400):
     return client.messages.create(
         model="claude-haiku-4-5-20251001",
@@ -239,11 +257,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     current_unit.pop(uid, None)
     user_context.pop(uid, None)
     await update.message.reply_text(
-        "مرحباً! مساعدك في معمار دجلة\n\n"
-        "وحدة: WW1 - W1 C3\n"
-        "ميزانية: عميل مقدمه 500 ألف إجمالي من 2 ل 2.5 مليون\n"
-        "Payment Plan: payment plan WW1 - W1 C3 مقدم 20% على 5 سنين\n"
-        "لما تخلص: تمام"
+        "أهلاً بيك 👋\n"
+        "أنا مساعد فريق المبيعات في معمار دجلة.\n"
+        "أقدر أساعدك تجيب تفاصيل وحدة، تدور بميزانية العميل، تحسب Payment Plan، تكتب سكريبت واتساب أو إعلان، وتشوف إحصائيات المشاريع.\n\n"
+        "اختار من الأزرار تحت أو ابعت طلبك مباشرة.",
+        reply_markup=sales_menu()
     )
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -266,6 +284,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message.text.strip()
     uid = update.message.from_user.id
     ml = msg.lower()
+
+    if msg in MENU_INSTRUCTIONS:
+        await update.message.reply_text(MENU_INSTRUCTIONS[msg], reply_markup=sales_menu())
+        return
 
     if user_context.get(uid, {}).get("waiting_password"):
         if msg == SECRET_PASSWORD:
