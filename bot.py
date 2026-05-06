@@ -158,6 +158,10 @@ def is_budget_request(text):
     ml = normalize_digits(text).lower()
     has_amount_unit = re.search(r'\d+(?:[\.,]\d+)?\s*(مليون|ملايين|ألف|الف|million|thousand|m|k)', ml) is not None
     return any(k.lower() in ml for k in BUDGET_WORDS) and any(c.isdigit() for c in ml) or has_amount_unit
+
+def is_amount_only(text):
+    ml = normalize_digits(text).strip().lower()
+    return re.fullmatch(r'\d+(?:[\.,]\d+)?\s*(مليون|ملايين|ألف|الف|million|thousand|m|k)?', ml) is not None
     ml = text.lower()
     return any(k.lower() in ml for k in BUDGET_WORDS) and any(c.isdigit() for c in text)
 
@@ -197,6 +201,23 @@ def has_confirmed_context(uid):
 
 def fmt_units_list(units, title):
     return title + "\n\n" + "\n\n---\n\n".join([fmt_unit(u) for u in units])
+
+def run_budget_search(uid, data, project=None):
+    tmin, tmax = data.get("total_min", 0), data.get("total_max", 0)
+    if tmin is None or tmax is None or tmax <= 0:
+        return None
+    exact, close = search_budget(tmin, tmax, data.get("down_min"), data.get("down_max"), project)
+    remember_project(uid, project)
+    remember_results(uid, exact or close, len(exact)==0, {"tmin":tmin,"tmax":tmax})
+    if exact:
+        parts = [fmt_unit(u) for u in exact[:3]]
+        add_h(uid,"assistant","وجدت " + str(len(exact)) + " وحدة")
+        return "لقيت لك " + str(len(exact)) + " وحدات مناسبة.\n\n" + "\n\n---\n\n".join(parts)
+    if close:
+        parts = [fmt_unit(u) for u in close[:3]]
+        add_h(uid,"assistant","وجدت " + str(len(close)) + " قريبة")
+        return "مفيش مطابق بالظبط، بس دي أقرب بدائل في حدود 20%.\n\n" + "\n\n---\n\n".join(parts)
+    return NO_CONFIRMED_DATA
 
 def detect_project(text):
     t = text.lower()
@@ -460,6 +481,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(MENU_INSTRUCTIONS[msg], reply_markup=sales_menu())
         return
 
+    ctx = ensure_context(uid)
+    if ctx.get("pending_intent") == "budget_search" and is_amount_only(msg):
+        data = parse_budget(msg)
+        if data:
+            if ctx.get("last_requested_field") == "down_payment":
+                if not data.get("down_min"):
+                    m = re.search(r'(\d+(?:[\.,]\d+)?)\s*(مليون|ملايين|ألف|الف|million|thousand|m|k)?', normalize_digits(msg).lower())
+                    if m:
+                        data["down_min"] = data["down_max"] = amount_value(m.group(1), m.group(2), "down")
+                data["total_min"], data["total_max"] = 0, 10**12
+            ctx.pop("pending_intent", None)
+            ctx.pop("last_requested_field", None)
+            out = run_budget_search(uid, data, ctx.get("last_project"))
+            await update.message.reply_text(out or NO_CONFIRMED_DATA, parse_mode="Markdown")
+            return
+
     if user_context.get(uid, {}).get("waiting_password"):
         if msg == SECRET_PASSWORD:
             user_context[uid] = {"authenticated": True}
@@ -551,6 +588,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             d = parse_budget(msg)
             if not d:
+                ctx = ensure_context(uid)
+                if ctx.get("last_requested_field") != "down_payment":
+                    ctx["pending_intent"] = "budget_search"
+                    ctx["last_requested_field"] = "down_payment"
+                    await update.message.reply_text("تقصد مقدم كام تقريبًا؟")
+                else:
+                    await update.message.reply_text(NO_CONFIRMED_DATA)
                 await update.message.reply_text("تقصد مقدم كام تقريبًا؟")
                 return
                 t = ai([{"role":"user","content":msg}],
@@ -579,6 +623,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     out = NO_CONFIRMED_DATA
                 await update.message.reply_text(out, parse_mode="Markdown")
                 return
+            dp = detect_project(msg) or ensure_context(uid).get("last_project")
+            add_h(uid,"user",msg)
+            out = run_budget_search(uid, d, dp)
+            await update.message.reply_text(out or NO_CONFIRMED_DATA, parse_mode="Markdown")
+            return
         except: pass
         await update.message.reply_text(NO_CONFIRMED_DATA)
         return
