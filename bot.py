@@ -57,8 +57,6 @@ def parse_budget(text):
     total_min = total_max = down_min = down_max = None
 
     total_range = re.search(r'(?:إجمالي|اجمالي|رينج|total|budget)?[^\d]{0,25}من\s*' + amount + r'\s*(?:ل|الى|إلى|-)\s*' + amount, t)
-    if not total_range:
-        total_range = re.search(r'(?:إجمالي|اجمالي|رينج|total|budget)[^\d]{0,15}' + amount + r'\s*-\s*' + amount, t)
     if total_range:
         u1 = total_range.group(2) or total_range.group(4)
         u2 = total_range.group(4) or total_range.group(2)
@@ -78,6 +76,9 @@ def parse_budget(text):
         if len(vals) >= 2:
             if nums[-1][1] and not nums[-2][1]:
                 vals[-2] = amount_value(nums[-2][0], nums[-1][1])
+        nums = re.findall(amount, t)
+        vals = [amount_value(n, u) for n, u in nums]
+        if len(vals) >= 2:
             total_min, total_max = vals[-2], vals[-1]
 
     if total_min and total_max and total_min > total_max:
@@ -94,39 +95,6 @@ def is_budget_request(text):
 def is_data_request(text):
     ml = text.lower()
     return any(k.lower() in ml for k in DATA_WORDS) or detect_project(text) is not None
-
-def ensure_context(uid):
-    if uid not in user_context:
-        user_context[uid] = {}
-    return user_context[uid]
-
-def remember_project(uid, project):
-    if project:
-        ensure_context(uid)["last_project"] = project
-
-def remember_unit(uid, unit):
-    if unit:
-        current_unit[uid] = unit
-        ctx = ensure_context(uid)
-        ctx["last_unit"] = unit
-        ctx["last_project"] = unit.get("sheet")
-
-def remember_results(uid, results, is_close=False, budget=None):
-    ctx = ensure_context(uid)
-    ctx["results"] = results
-    ctx["last_results"] = results
-    ctx["is_close"] = is_close
-    if budget:
-        ctx["budget"] = budget
-    if results:
-        remember_unit(uid, min(results, key=lambda x: x.get("total_num") or 0))
-
-def has_confirmed_context(uid):
-    ctx = user_context.get(uid, {})
-    return bool(current_unit.get(uid) or ctx.get("results") or ctx.get("last_results"))
-
-def fmt_units_list(units, title):
-    return title + "\n\n" + "\n\n---\n\n".join([fmt_unit(u) for u in units])
 
 def detect_project(text):
     t = text.lower()
@@ -475,8 +443,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             d = parse_budget(msg)
             if not d:
-                await update.message.reply_text(NO_CONFIRMED_DATA)
-                return
+                t = ai([{"role":"user","content":msg}],
+                       system='JSON only: {"total_min":0,"total_max":0,"down_min":null,"down_max":null} million=1000000 thousand=1000',
+                       max_tokens=150)
+                d = json.loads(t[t.find("{"):t.rfind("}")+1])
             tmin, tmax = d.get("total_min",0), d.get("total_max",0)
             if tmin > 0 and tmax > 0:
                 dp = detect_project(msg)
@@ -491,6 +461,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 elif close:
                     parts = [fmt_unit(u) for u in close[:15]]
                     out = "مفيش مطابق بالظبط، بس دي أقرب بدائل في حدود 20%.\n\n" + "\n\n---\n\n".join(parts)
+                    out = "مفيش مطابق بالظبط، دي بدائل قريبة من الشيت في حدود 20%:\n\n" + "\n\n---\n\n".join(parts)
                     add_h(uid,"assistant","وجدت " + str(len(close)) + " قريبة")
                 else:
                     out = NO_CONFIRMED_DATA
