@@ -32,6 +32,7 @@ chat_history = {}
 current_unit = {}
 headers_cache = {}
 
+NO_CONFIRMED_DATA = "مش لاقي بيانات مؤكدة للحاجة دي في الشيت."
 NO_CONFIRMED_DATA = "مش لاقي بيانات مؤكدة في الشيت للطلب ده. ابعتلي كود الوحدة أو الميزانية بصيغة أوضح."
 
 BUDGET_WORDS = ["مقدم", "مقدمة", "مقدمه", "مقدمته", "ميزانية", "إجمالي", "اجمالي", "رينج", "range", "total", "budget", "down"]
@@ -42,6 +43,11 @@ def clean(s):
     try: return float(re.sub(r'[^\d.]', '', str(s)))
     except: return 0
 
+def normalize_digits(text):
+    return str(text).translate(str.maketrans("٠١٢٣٤٥٦٧٨٩٫٬", "0123456789.,"))
+
+def amount_value(num, unit, kind=None):
+    v = float(normalize_digits(num).replace(",", "."))
 def amount_value(num, unit):
     v = float(str(num).replace(",", "."))
     unit = (unit or "").lower()
@@ -49,6 +55,63 @@ def amount_value(num, unit):
         return v * 1000000
     if unit in ["ألف", "الف", "thousand", "k"]:
         return v * 1000
+    if kind == "down" and v < 10000:
+        return v * 1000
+    if kind == "total" and v < 100:
+        return v * 1000000
+    return v
+
+def parse_budget(text):
+    t = normalize_digits(text).lower().replace("|", " ").replace("،", " ")
+    amount = r'(\d+(?:[\.,]\d+)?)\s*(مليون|ملايين|ألف|الف|million|thousand|m|k)?'
+    total_min = total_max = down_min = down_max = None
+
+    def find_range(source):
+        m = re.search(r'من\s*' + amount + r'\s*(?:ل|الى|إلى|-)\s*' + amount, source)
+        if not m:
+            m = re.search(amount + r'\s*-\s*' + amount, source)
+        if not m:
+            return None, None
+        u1 = m.group(2) or m.group(4)
+        u2 = m.group(4) or m.group(2)
+        return amount_value(m.group(1), u1, "total"), amount_value(m.group(3), u2, "total")
+
+    down_part = re.search(r'(?:مقدم|مقدمة|مقدمه|مقدمته|down)(.*?)(?=إجمالي|اجمالي|total|budget|$)', t)
+    if down_part:
+        d1, d2 = find_range(down_part.group(1))
+        if d1 and d2:
+            down_min, down_max = sorted([d1, d2])
+        else:
+            m = re.search(amount, down_part.group(1))
+            if m:
+                d = amount_value(m.group(1), m.group(2), "down")
+                down_min = down_max = d
+    if down_min is None:
+        before_down = re.search(amount + r'[^\d]{0,15}(?:مقدم|مقدمة|مقدمه|مقدمته|down)', t)
+        if before_down:
+            d = amount_value(before_down.group(1), before_down.group(2), "down")
+            down_min = down_max = d
+
+    total_part = re.search(r'(?:إجمالي|اجمالي|total|budget)(.*)', t)
+    if total_part:
+        total_min, total_max = find_range(total_part.group(1))
+        if total_min is None or total_max is None:
+            m = re.search(amount, total_part.group(1))
+            if m:
+                total_min = total_max = amount_value(m.group(1), m.group(2), "total")
+
+    if (total_min is None or total_max is None) and "رينج" in t:
+        total_min, total_max = find_range(t)
+
+    if total_min is None or total_max is None:
+        nums = re.findall(amount, t)
+        if len(nums) >= 2:
+            vals = [amount_value(n, u, "total") for n, u in nums]
+            if nums[-1][1] and not nums[-2][1]:
+                vals[-2] = amount_value(nums[-2][0], nums[-1][1], "total")
+            total_min, total_max = vals[-2], vals[-1]
+        elif len(nums) == 1 and not down_part:
+            total_min = total_max = amount_value(nums[0][0], nums[0][1], "total")
     return v
 
 def parse_budget(text):
@@ -84,17 +147,56 @@ def parse_budget(text):
     if total_min and total_max and total_min > total_max:
         total_min, total_max = total_max, total_min
 
+    if total_min or down_min:
+        if total_min is None:
+            total_min, total_max = 0, 10**12
     if total_min and total_max:
         return {"total_min": total_min, "total_max": total_max, "down_min": down_min, "down_max": down_max}
     return None
 
 def is_budget_request(text):
+    ml = normalize_digits(text).lower()
+    has_amount_unit = re.search(r'\d+(?:[\.,]\d+)?\s*(مليون|ملايين|ألف|الف|million|thousand|m|k)', ml) is not None
+    return any(k.lower() in ml for k in BUDGET_WORDS) and any(c.isdigit() for c in ml) or has_amount_unit
     ml = text.lower()
     return any(k.lower() in ml for k in BUDGET_WORDS) and any(c.isdigit() for c in text)
 
 def is_data_request(text):
     ml = text.lower()
     return any(k.lower() in ml for k in DATA_WORDS) or detect_project(text) is not None
+
+def ensure_context(uid):
+    if uid not in user_context:
+        user_context[uid] = {}
+    return user_context[uid]
+
+def remember_project(uid, project):
+    if project:
+        ensure_context(uid)["last_project"] = project
+
+def remember_unit(uid, unit):
+    if unit:
+        current_unit[uid] = unit
+        ctx = ensure_context(uid)
+        ctx["last_unit"] = unit
+        ctx["last_project"] = unit.get("sheet")
+
+def remember_results(uid, results, is_close=False, budget=None):
+    ctx = ensure_context(uid)
+    ctx["results"] = results
+    ctx["last_results"] = results
+    ctx["is_close"] = is_close
+    if budget:
+        ctx["budget"] = budget
+    if results:
+        remember_unit(uid, min(results, key=lambda x: x.get("total_num") or 0))
+
+def has_confirmed_context(uid):
+    ctx = user_context.get(uid, {})
+    return bool(current_unit.get(uid) or ctx.get("results") or ctx.get("last_results"))
+
+def fmt_units_list(units, title):
+    return title + "\n\n" + "\n\n---\n\n".join([fmt_unit(u) for u in units])
 
 def detect_project(text):
     t = text.lower()
@@ -187,9 +289,11 @@ def search_budget(tmin, tmax, dmin=None, dmax=None, project=None):
             t, d = u["total_num"], u["down_num"]
             if t == 0: continue
             ok_t = tmin <= t <= tmax
-            ok_d = (dmin is None or dmax is None) or (d == 0) or (dmin <= d <= dmax)
+            ok_d = (dmin is None or dmax is None) or (d != 0 and dmin <= d <= dmax)
+            close_t = tmin*0.8 <= t <= tmax*1.2
+            close_d = (dmin is not None and dmax is not None and d != 0 and dmin*0.8 <= d <= dmax*1.2)
             if ok_t and ok_d: exact.append(u)
-            elif tmin*0.8 <= t <= tmax*1.2: close.append(u)
+            elif (dmin is not None and dmax is not None and ok_t and close_d) or (dmin is None and dmax is None and close_t): close.append(u)
     return exact, close
 
 def project_stats(pfilter=None):
@@ -294,6 +398,9 @@ def sales_menu():
     ], resize_keyboard=True)
 
 MENU_INSTRUCTIONS = {
+    "تفاصيل وحدة": "ابعت كود الوحدة كده: WW1 - W1 C3",
+    "بحث بالميزانية": "مثال: مقدم 600 الف اجمالي من 3 ل 4 مليون",
+    "Payment Plan": "مثال: payment plan WW1 - W1 C3 مقدم 20% على 5 سنين",
     "تفاصيل وحدة": "ابعت اسم المشروع وكود الوحدة بالشكل ده:\nWW1 - W1 C3",
     "بحث بالميزانية": "اكتب ميزانية العميل بالشكل ده:\nعميل مقدمه 500 ألف إجمالي من 2 ل 2.5 مليون",
     "Payment Plan": "اكتب طلب خطة السداد بالشكل ده:\npayment plan WW1 - W1 C3 مقدم 20% على 5 سنين",
@@ -316,6 +423,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_history[uid] = []
     current_unit.pop(uid, None)
     user_context.pop(uid, None)
+    await update.message.reply_text("أهلاً، ابعتلي اللي محتاجه وأنا هساعدك.", reply_markup=sales_menu())
     await update.message.reply_text(
         "أهلاً بيك 👋\n"
         "أنا مساعد فريق المبيعات في معمار دجلة.\n"
@@ -365,7 +473,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("سجل المبيعات:\n\n" + get_sales())
         else:
             user_context[uid] = {"waiting_password": True}
-            await update.message.reply_text("أدخل كلمة المرور:")
+            await update.message.reply_text("ابعت كلمة المرور:")
         return
 
     if "بيعة" in ml or "بعنا" in ml or "اتباع" in ml:
@@ -443,22 +551,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             d = parse_budget(msg)
             if not d:
+                await update.message.reply_text("تقصد مقدم كام تقريبًا؟")
+                return
                 t = ai([{"role":"user","content":msg}],
                        system='JSON only: {"total_min":0,"total_max":0,"down_min":null,"down_max":null} million=1000000 thousand=1000',
                        max_tokens=150)
                 d = json.loads(t[t.find("{"):t.rfind("}")+1])
             tmin, tmax = d.get("total_min",0), d.get("total_max",0)
-            if tmin > 0 and tmax > 0:
+            if tmin is not None and tmax is not None and tmax > 0:
                 dp = detect_project(msg)
                 exact, close = search_budget(tmin, tmax, d.get("down_min"), d.get("down_max"), dp)
                 add_h(uid,"user",msg)
                 remember_project(uid, dp)
                 remember_results(uid, exact or close, len(exact)==0, {"tmin":tmin,"tmax":tmax})
                 if exact:
-                    parts = [fmt_unit(u) for u in exact[:15]]
-                    out = "✅ *" + str(len(exact)) + " وحدة في النطاق:*\n\n" + "\n\n---\n\n".join(parts)
+                    parts = [fmt_unit(u) for u in exact[:3]]
+                    out = "لقيت لك " + str(len(exact)) + " وحدات مناسبة.\n\n" + "\n\n---\n\n".join(parts)
                     add_h(uid,"assistant","وجدت " + str(len(exact)) + " وحدة")
                 elif close:
+                    parts = [fmt_unit(u) for u in close[:3]]
+                    out = "مفيش مطابق بالظبط، بس دي أقرب بدائل في حدود 20%.\n\n" + "\n\n---\n\n".join(parts)
                     parts = [fmt_unit(u) for u in close[:15]]
                     out = "مفيش مطابق بالظبط، بس دي أقرب بدائل في حدود 20%.\n\n" + "\n\n---\n\n".join(parts)
                     out = "مفيش مطابق بالظبط، دي بدائل قريبة من الشيت في حدود 20%:\n\n" + "\n\n---\n\n".join(parts)
