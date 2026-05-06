@@ -33,6 +33,7 @@ current_unit = {}
 headers_cache = {}
 
 NO_CONFIRMED_DATA = "مش لاقي بيانات مؤكدة للحاجة دي في الشيت."
+NO_CONFIRMED_DATA = "مش لاقي بيانات مؤكدة في الشيت للطلب ده. ابعتلي كود الوحدة أو الميزانية بصيغة أوضح."
 
 BUDGET_WORDS = ["مقدم", "مقدمة", "مقدمه", "مقدمته", "ميزانية", "إجمالي", "اجمالي", "رينج", "range", "total", "budget", "down"]
 DATA_WORDS = BUDGET_WORDS + ["وحدة", "الوحدة", "كود", "مشروع", "المشروع", "اتاحة", "إتاحة", "اتاحه", "available", "availability", "سعر", "price", "area", "مساحة", "payment plan", "بلان", "خطة سداد", "قسط", "اقساط", "أقساط", "تسليم", "delivery"]
@@ -47,6 +48,8 @@ def normalize_digits(text):
 
 def amount_value(num, unit, kind=None):
     v = float(normalize_digits(num).replace(",", "."))
+def amount_value(num, unit):
+    v = float(str(num).replace(",", "."))
     unit = (unit or "").lower()
     if unit in ["مليون", "ملايين", "million", "m"]:
         return v * 1000000
@@ -109,6 +112,37 @@ def parse_budget(text):
             total_min, total_max = vals[-2], vals[-1]
         elif len(nums) == 1 and not down_part:
             total_min = total_max = amount_value(nums[0][0], nums[0][1], "total")
+    return v
+
+def parse_budget(text):
+    t = text.lower().replace("|", " ")
+    amount = r'(\d+(?:[\.,]\d+)?)\s*(مليون|ملايين|ألف|الف|million|thousand|m|k)?'
+    total_min = total_max = down_min = down_max = None
+
+    total_range = re.search(r'(?:إجمالي|اجمالي|رينج|total|budget)?[^\d]{0,25}من\s*' + amount + r'\s*(?:ل|الى|إلى|-)\s*' + amount, t)
+    if total_range:
+        u1 = total_range.group(2) or total_range.group(4)
+        u2 = total_range.group(4) or total_range.group(2)
+        total_min = amount_value(total_range.group(1), u1)
+        total_max = amount_value(total_range.group(3), u2)
+
+    down_match = re.search(r'(?:مقدم|مقدمة|مقدمه|مقدمته|down)[^\d]{0,15}' + amount, t)
+    if down_match:
+        d = amount_value(down_match.group(1), down_match.group(2))
+        down_min = down_max = d
+
+    if total_min is None or total_max is None:
+        total_part = re.search(r'(?:إجمالي|اجمالي|رينج|total|budget)(.*)', t)
+        source = total_part.group(1) if total_part else t
+        nums = re.findall(amount, source)
+        vals = [amount_value(n, u) for n, u in nums]
+        if len(vals) >= 2:
+            if nums[-1][1] and not nums[-2][1]:
+                vals[-2] = amount_value(nums[-2][0], nums[-1][1])
+        nums = re.findall(amount, t)
+        vals = [amount_value(n, u) for n, u in nums]
+        if len(vals) >= 2:
+            total_min, total_max = vals[-2], vals[-1]
 
     if total_min and total_max and total_min > total_max:
         total_min, total_max = total_max, total_min
@@ -116,6 +150,7 @@ def parse_budget(text):
     if total_min or down_min:
         if total_min is None:
             total_min, total_max = 0, 10**12
+    if total_min and total_max:
         return {"total_min": total_min, "total_max": total_max, "down_min": down_min, "down_max": down_max}
     return None
 
@@ -127,6 +162,8 @@ def is_budget_request(text):
 def is_amount_only(text):
     ml = normalize_digits(text).strip().lower()
     return re.fullmatch(r'\d+(?:[\.,]\d+)?\s*(مليون|ملايين|ألف|الف|million|thousand|m|k)?', ml) is not None
+    ml = text.lower()
+    return any(k.lower() in ml for k in BUDGET_WORDS) and any(c.isdigit() for c in text)
 
 def is_data_request(text):
     ml = text.lower()
@@ -385,6 +422,9 @@ MENU_INSTRUCTIONS = {
     "تفاصيل وحدة": "ابعت كود الوحدة كده: WW1 - W1 C3",
     "بحث بالميزانية": "مثال: مقدم 600 الف اجمالي من 3 ل 4 مليون",
     "Payment Plan": "مثال: payment plan WW1 - W1 C3 مقدم 20% على 5 سنين",
+    "تفاصيل وحدة": "ابعت اسم المشروع وكود الوحدة بالشكل ده:\nWW1 - W1 C3",
+    "بحث بالميزانية": "اكتب ميزانية العميل بالشكل ده:\nعميل مقدمه 500 ألف إجمالي من 2 ل 2.5 مليون",
+    "Payment Plan": "اكتب طلب خطة السداد بالشكل ده:\npayment plan WW1 - W1 C3 مقدم 20% على 5 سنين",
     "سكريبت واتساب": "ابعت الوحدة مع كلمة سكريبت، مثال:\nسكريبت WW1 - W1 C3",
     "كتابة إعلان": "ابعت الوحدة الأول، وبعدها اكتب: اعلان\nمثال:\nWW1 - W1 C3\nوبعدها:\nاعلان",
     "إحصائيات المشاريع": "اكتب اسم المشروع أو اطلب كل الإحصائيات، مثال:\nكام وحدة في WW1\nأو:\nإحصائيات المشاريع",
@@ -405,6 +445,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     current_unit.pop(uid, None)
     user_context.pop(uid, None)
     await update.message.reply_text("أهلاً، ابعتلي اللي محتاجه وأنا هساعدك.", reply_markup=sales_menu())
+    await update.message.reply_text(
+        "أهلاً بيك 👋\n"
+        "أنا مساعد فريق المبيعات في معمار دجلة.\n"
+        "أقدر أساعدك تجيب تفاصيل وحدة، تدور بميزانية العميل، تحسب Payment Plan، تكتب سكريبت واتساب أو إعلان، وتشوف إحصائيات المشاريع.\n\n"
+        "اختار من الأزرار تحت أو ابعت طلبك مباشرة.",
+        reply_markup=sales_menu()
+    )
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -548,6 +595,33 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await update.message.reply_text("تقصد مقدم كام تقريبًا؟")
                 else:
                     await update.message.reply_text(NO_CONFIRMED_DATA)
+                await update.message.reply_text("تقصد مقدم كام تقريبًا؟")
+                return
+                t = ai([{"role":"user","content":msg}],
+                       system='JSON only: {"total_min":0,"total_max":0,"down_min":null,"down_max":null} million=1000000 thousand=1000',
+                       max_tokens=150)
+                d = json.loads(t[t.find("{"):t.rfind("}")+1])
+            tmin, tmax = d.get("total_min",0), d.get("total_max",0)
+            if tmin is not None and tmax is not None and tmax > 0:
+                dp = detect_project(msg)
+                exact, close = search_budget(tmin, tmax, d.get("down_min"), d.get("down_max"), dp)
+                add_h(uid,"user",msg)
+                remember_project(uid, dp)
+                remember_results(uid, exact or close, len(exact)==0, {"tmin":tmin,"tmax":tmax})
+                if exact:
+                    parts = [fmt_unit(u) for u in exact[:3]]
+                    out = "لقيت لك " + str(len(exact)) + " وحدات مناسبة.\n\n" + "\n\n---\n\n".join(parts)
+                    add_h(uid,"assistant","وجدت " + str(len(exact)) + " وحدة")
+                elif close:
+                    parts = [fmt_unit(u) for u in close[:3]]
+                    out = "مفيش مطابق بالظبط، بس دي أقرب بدائل في حدود 20%.\n\n" + "\n\n---\n\n".join(parts)
+                    parts = [fmt_unit(u) for u in close[:15]]
+                    out = "مفيش مطابق بالظبط، بس دي أقرب بدائل في حدود 20%.\n\n" + "\n\n---\n\n".join(parts)
+                    out = "مفيش مطابق بالظبط، دي بدائل قريبة من الشيت في حدود 20%:\n\n" + "\n\n---\n\n".join(parts)
+                    add_h(uid,"assistant","وجدت " + str(len(close)) + " قريبة")
+                else:
+                    out = NO_CONFIRMED_DATA
+                await update.message.reply_text(out, parse_mode="Markdown")
                 return
             dp = detect_project(msg) or ensure_context(uid).get("last_project")
             add_h(uid,"user",msg)
