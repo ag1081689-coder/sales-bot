@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import logging
 import anthropic
 import gspread
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -8,7 +9,24 @@ from telegram.ext import Application, MessageHandler, CommandHandler, CallbackQu
 
 SHEET_ID = "1x5CfKVrgXZy1-1yVPoqAwcS0KpxeOyzxfA8shDt2qkw"
 AV_SHEET_ID = "1f-1lkgr7nGiQofoREnhfbszjaJFu17OtZaMJ09_sLWw"
-SECRET_PASSWORD = os.environ.get("SECRET_PASSWORD", "Adel2026")
+REQUIRED_ENV_VARS = ["GOOGLE_CREDENTIALS", "ANTHROPIC_API_KEY", "TELEGRAM_TOKEN", "SECRET_PASSWORD"]
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logger = logging.getLogger(__name__)
+
+def require_env(name):
+    value = os.environ.get(name)
+    if not value:
+        raise RuntimeError(f"Missing required environment variable: {name}")
+    return value
+
+def validate_env():
+    missing = [name for name in REQUIRED_ENV_VARS if not os.environ.get(name)]
+    if missing:
+        raise RuntimeError("Missing required environment variables: " + ", ".join(missing))
+
+validate_env()
+SECRET_PASSWORD = require_env("SECRET_PASSWORD")
 
 PROJECTS = ["D11 BUSINESS", "D12 Medical", "METRO +", "TIJAN", "WW1", "WW2", "STAGE X", "RESALE", "MIDST"]
 
@@ -21,11 +39,11 @@ PROJECT_ALIASES = {
 
 SYSTEM_PROMPT = "ant msa3d mby3at fy sh3rkt m3mar dgla - kl almshary3 fy al3ashr mn rmdan - kl alwHdat edaryt aw tgaryt aw tbyt la skny - kl alm3lomat mn alshyt fqt la txtr3 ay arqam - rdd mxtsr wmbashr - HfZ 3la syaq alMHadtha - llbHth: PROJECT - UNIT CODE mthal WW1 - W1 C3 - llmyzanya: 3myl mqdmh X alf eGmaly mn Y l Z mlyon - lma txls: tmam"
 
-creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
+creds_json = json.loads(require_env("GOOGLE_CREDENTIALS"))
 gc = gspread.service_account_from_dict(creds_json)
 sh = gc.open_by_key(SHEET_ID)
 av_sh = gc.open_by_key(AV_SHEET_ID)
-client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+client = anthropic.Anthropic(api_key=require_env("ANTHROPIC_API_KEY"))
 
 user_context = {}
 chat_history = {}
@@ -34,7 +52,9 @@ headers_cache = {}
 
 def clean(s):
     try: return float(re.sub(r'[^\d.]', '', str(s)))
-    except: return 0
+    except Exception:
+        logger.exception("Failed to clean numeric value: %r", s)
+        return 0
 
 def detect_project(text):
     t = text.lower()
@@ -149,12 +169,14 @@ def project_stats(pfilter=None):
 def save_sale(project, unit, price, client_name):
     try:
         try: ws = sh.worksheet("المبيعات")
-        except:
+        except Exception:
+            logger.info("Sales worksheet not found; creating it")
             ws = sh.add_worksheet("المبيعات", 1000, 10)
             ws.append_row(["المشروع","الوحدة","السعر","العميل","التاريخ"])
         from datetime import datetime
         ws.append_row([project, unit, price, client_name, datetime.now().strftime("%Y-%m-%d %H:%M")])
-    except: pass
+    except Exception:
+        logger.exception("Failed to save sale for project=%r unit=%r", project, unit)
 
 def get_sales():
     try:
@@ -162,7 +184,9 @@ def get_sales():
         data = ws.get_all_values()
         if len(data) <= 1: return "لا توجد مبيعات."
         return "\n".join([f"• {r[0]}-{r[1]}-{r[2]}-{r[3]}-{r[4]}" for r in data[1:] if len(r)>=4])
-    except: return "لا توجد مبيعات."
+    except Exception:
+        logger.exception("Failed to read sales worksheet")
+        return "لا توجد مبيعات."
 
 def fmt_unit(u):
     e = "✅" if u["status"]=="available" else "🔴" if u["status"]=="reserved" else "🔵"
@@ -195,7 +219,9 @@ def calc_plan(total_str, dp, years):
         t = clean(total_str)
         d = t*(dp/100); r = t-d
         return {"total":t,"down":d,"rem":r,"q":r/(years*4),"m":r/(years*12),"years":years,"dp":dp}
-    except: return None
+    except Exception:
+        logger.exception("Failed to calculate payment plan for total=%r dp=%r years=%r", total_str, dp, years)
+        return None
 
 def style_buttons():
     return InlineKeyboardMarkup([
@@ -294,7 +320,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 current_unit.pop(uid, None)
                 await update.message.reply_text("✅ " + d["project"] + " | " + d["unit"] + " | " + d["price"] + " | " + d["client"])
             return
-        except: pass
+        except Exception:
+            logger.exception("Failed to parse or save sale message")
 
     if ml.strip() in ["تمام","ok","okay","تم","موافق","next"]:
         current_unit.pop(uid, None)
@@ -379,7 +406,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     out = "مفيش وحدات في النطاق ده. جرب توسع النطاق."
                 await update.message.reply_text(out, parse_mode="Markdown")
                 return
-        except: pass
+        except Exception:
+            logger.exception("Failed to parse budget message")
 
     dp = detect_project(msg)
     if any(k in ml for k in ["كام وحدة","كل المشاريع","جميع","إتاحة","اتاحه","احصائيه"]):
@@ -407,7 +435,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(reply)
 
 def main():
-    app = Application.builder().token(os.environ["TELEGRAM_TOKEN"]).build()
+    app = Application.builder().token(require_env("TELEGRAM_TOKEN")).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
